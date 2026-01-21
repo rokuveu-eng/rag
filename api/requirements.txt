@@ -4,3 +4,4 @@ qdrant-client
 httpx
 rank-bm25
 openpyxl
+python-multipart

@@ -1,0 +1,12 @@
+# Python
+__pycache__/
+*.pyc/
+*.pyd
+*.pyo
+
+# Docker
+docker-compose.override.yml
+
+# IDE
+.idea/
+.vscode/
