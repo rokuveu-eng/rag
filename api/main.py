@@ -5,14 +5,13 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse
 from qdrant_client import QdrantClient, models
 import httpx
-from fastembed import TextEmbedding
+from sparse_dot_bm25 import bm25
+import numpy as np
 import json
 import openpyxl
 import io
 import logging
-import os
-import numpy as np
-from typing import List
+import re
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -20,7 +19,6 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI()
 
-# Serve static files
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
 @app.get("/", response_class=HTMLResponse)
@@ -28,145 +26,142 @@ async def read_root():
     with open("static/index.html") as f:
         return f.read()
 
-# Initialize clients and models
 qdrant_client = QdrantClient(host="qdrant", port=6333)
-
-# For dense embeddings, we use a multilingual model
-dense_model = TextEmbedding(model_name="intfloat/multilingual-e5-large", max_length=512)
-
-# For sparse embeddings, we use a model that supports it.
-# IMPORTANT: This model is English-only. Your data appears to be in Russian.
-# This might not produce good results for sparse search.
-# We are using it to get the architecture right. We can swap to a multilingual
-# sparse model if/when one becomes available for fastembed.
-sparse_model = TextEmbedding(model_name="Qdrant/bge-sparse-large-en-v1.5", max_length=512)
-
+ollama_api_url = "http://ollama:11434/api/embeddings"
 
 def create_collection(collection_name: str):
     try:
         qdrant_client.get_collection(collection_name=collection_name)
-        logger.info(f"Collection '{{collection_name}}' already exists.")
     except Exception:
-        logger.info(f"Collection '{{collection_name}}' not found. Creating new collection.")
         qdrant_client.recreate_collection(
             collection_name=collection_name,
             vectors_config={
-                "dense": models.VectorParams(size=1024, distance=models.Distance.COSINE),
+                "text-dense": models.VectorParams(size=1024, distance=models.Distance.COSINE),
             },
             sparse_vectors_config={
-                "sparse": models.SparseVectorParams(
+                "text-sparse": models.SparseVectorParams(
                     index=models.SparseIndexParams(
                         on_disk=False,
                     )
                 )
             },
         )
-        logger.info(f"Collection '{{collection_name}}' created.")
+
+async def get_embedding(text: str):
+    async with httpx.AsyncClient(timeout=300.0) as client:
+        response = await client.post(ollama_api_url, json={"model": "bge-m3", "prompt": text})
+        response.raise_for_status()
+        return response.json()["embedding"]
+
+def preprocess_text(text: str) -> list[str]:
+    text = text.lower()
+    text = re.sub(r'[^\w\s]', '', text)  # Remove punctuation
+    return text.split()
+
 
 @app.post("/upload_processed_xlsx")
 async def upload_processed_xlsx(file: UploadFile = File(...), skip_rows: int = Form(...), mappings: str = Form(...), collection_name: str = Form(...)):
-    logger.info(f"Received request to /upload_processed_xlsx for collection: {{collection_name}}")
+    logger.info(f"Received request to /upload_processed_xlsx for collection: {collection_name}")
+    logger.info(f"skip_rows: {skip_rows}, mappings: {mappings}")
     create_collection(collection_name)
-
+    
     try:
         mappings = json.loads(mappings)
+        if not mappings:
+            raise HTTPException(status_code=400, detail="Mappings cannot be empty")
+        logger.info(f"Parsed mappings: {mappings}")
         contents = await file.read()
         workbook = openpyxl.load_workbook(io.BytesIO(contents))
         sheet = workbook.active
 
         documents = []
-        payloads = []
-        rows = list(sheet.iter_rows(min_row=skip_rows + 2, values_only=True))
-        for row in rows:
-            text_to_embed = f"Артикул - {{row[mappings['Артикул']]}}, Наименование - {{row[mappings['Наименование']]}}, Тариф с НДС, руб - {{row[mappings['Тариф с НДС, руб']]}}, Имя файла - {{file.filename}}"
+        for row in sheet.iter_rows(min_row=skip_rows + 2, values_only=True):
+            text_to_embed = f"Артикул - {row[mappings['Артикул']]}, Наименование - {row[mappings['Наименование']]}, Тариф с НДС, руб - {row[mappings['Тариф с НДС, руб']]}, Имя файла - {file.filename}"
             documents.append(text_to_embed)
+        
+        # Create BM25 model
+        processed_docs = [preprocess_text(doc) for doc in documents]
+        bm25_model = bm25.BM25(processed_docs)
+        
+        points = []
+        for i, (doc, processed_doc) in enumerate(zip(documents, processed_docs)):
+            # Dense vector from Ollama
+            dense_vector = await get_embedding(doc)
+            
+            # Sparse vector from BM25
+            sparse_vector_indices, sparse_vector_values = bm25_model.get_doc_vector(processed_doc)
+            sparse_vector = models.SparseVector(indices=sparse_vector_indices.tolist(), values=sparse_vector_values.tolist())
+            
+            # Payload
+            row_data = list(sheet.iter_rows(min_row=skip_rows + 2, values_only=True))[i]
             payload = {}
             for header, col_idx in mappings.items():
-                payload[header] = row[col_idx]
+                payload[header] = row_data[col_idx]
             payload["Остаток"] = ""
-            payloads.append(payload)
-
-        logger.info(f"Generating embeddings for {{len(documents)}} documents...")
-        # Generate dense embeddings
-        dense_embeddings = list(dense_model.embed(documents, batch_size=32))
-        dense_embeddings = [e.tolist() for e in dense_embeddings]
-
-        # Generate sparse embeddings
-        sparse_embeddings = list(sparse_model.embed(documents, batch_size=32, sparse=True))
-
-        # Check if sparse embeddings are what we expect
-        if not sparse_embeddings or not hasattr(sparse_embeddings[0], 'indices'):
-             raise RuntimeError("Sparse embedding model did not return sparse embeddings. Check the model.")
-
-
-        points = []
-        for i, (dense_emb, sparse_emb, payload) in enumerate(zip(dense_embeddings, sparse_embeddings, payloads)):
+            
             points.append(models.PointStruct(
-                id=i,  # Simple sequential IDs
+                id=i,
                 vector={
-                    "dense": dense_emb,
-                    "sparse": models.SparseVector(indices=sparse_emb.indices.tolist(), values=sparse_emb.values.tolist()),
+                    "text-dense": dense_vector,
+                    "text-sparse": sparse_vector
                 },
                 payload=payload
             ))
 
-        logger.info(f"Upserting {{len(points)}} points to Qdrant...")
         qdrant_client.upsert(
             collection_name=collection_name,
             wait=True,
             points=points,
         )
-        logger.info("Upsert complete.")
         return {"status": "success", "indexed_rows": len(documents)}
     except Exception as e:
-        logger.error(f"Error processing file: {{e}}", exc_info=True)
+        logger.error(f"Error processing file: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/search")
 async def search(query: str = Query(...), collection_name: str = Query(...)):
-    logger.info(f"Received search query: '{{query}}' for collection: '{{collection_name}}'")
+    # Dense vector for semantic search from Ollama
+    dense_vector = await get_embedding(query)
 
-    # Generate dense vector for the query
-    query_dense_embeddings = list(dense_model.embed([query]))
-    query_dense_vector = query_dense_embeddings[0].tolist()
-
-    # Generate sparse vector for the query
-    query_sparse_embeddings = list(sparse_model.embed([query], sparse=True))
+    # In a real application, you would load the bm25 model from a saved state.
+    # For simplicity, we are re-creating it here from all docs in the collection.
+    all_docs_scroll = qdrant_client.scroll(collection_name=collection_name, limit=10000, with_payload=True)
     
-    if not query_sparse_embeddings or not hasattr(query_sparse_embeddings[0], 'indices'):
-        raise RuntimeError("Sparse embedding model did not return sparse embeddings for query. Check the model.")
+    corpus = []
+    for point in all_docs_scroll[0]:
+        payload = point.payload
+        doc_text = f"Артикул - {payload.get('Артикул')}, Наименование - {payload.get('Наименование')}, Тариф с НДС, руб - {payload.get('Тариф с НДС, руб')}, Имя файла - {payload.get('Имя файла')}"
+        corpus.append(doc_text)
 
-    query_sparse_vector = models.SparseVector(
-        indices=query_sparse_embeddings[0].indices.tolist(),
-        values=query_sparse_embeddings[0].values.tolist()
-    )
+    processed_corpus = [preprocess_text(doc) for doc in corpus]
+    bm25_model = bm25.BM25(processed_corpus)
 
-    # Hybrid search request
-    dense_request = models.SearchRequest(
-        vector=models.NamedVector(
-            name="dense",
-            vector=query_dense_vector,
-        ),
-        limit=5,
-        with_payload=True,
-    )
-    sparse_request = models.SearchRequest(
-        vector=models.NamedSparseVector(
-            name="sparse",
-            vector=query_sparse_vector,
-        ),
-        limit=5,
-        with_payload=True,
-    )
-
-    logger.info("Performing hybrid search in Qdrant...")
+    # Sparse vector for keyword search
+    processed_query = preprocess_text(query)
+    sparse_vector_indices, sparse_vector_values = bm25_model.get_doc_vector(processed_query)
+    sparse_vector = models.SparseVector(indices=sparse_vector_indices.tolist(), values=sparse_vector_values.tolist())
+    
+    # Hybrid search
     search_result = qdrant_client.search_batch(
         collection_name=collection_name,
-        requests=[dense_request, sparse_request],
+        requests=[
+            models.SearchRequest(
+                vector=models.NamedVector(
+                    name="text-dense",
+                    vector=dense_vector,
+                ),
+                limit=5,
+                with_payload=True,
+            ),
+             models.SearchRequest(
+                vector=models.NamedSparseVector(
+                    name="text-sparse",
+                    vector=sparse_vector,
+                ),
+                limit=5,
+                with_payload=True,
+            ),
+        ],
     )
-    logger.info("Search complete.")
 
-    return {
-        "dense_search_results": search_result[0],
-        "sparse_search_results": search_result[1]
-    }
+    return {"dense_search_results": search_result[0], "sparse_search_results": search_result[1]}

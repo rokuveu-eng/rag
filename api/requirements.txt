@@ -2,6 +2,7 @@ fastapi
 uvicorn
 qdrant-client>=1.7.0
 httpx
-fastembed
+sparse-dot-bm25
 openpyxl
 python-multipart
+numpy
