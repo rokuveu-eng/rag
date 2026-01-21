@@ -4,15 +4,13 @@ from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Query
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse
 from qdrant_client import QdrantClient, models
-from qdrant_client.http.models import UpdateStatus
 import httpx
-from sparse_dot_bm25 import bm25
-import numpy as np
+from rank_bm25 import BM25Okapi
 import json
 import openpyxl
 import io
 import logging
-import re
+import os
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -29,6 +27,22 @@ async def read_root():
 
 qdrant_client = QdrantClient(host="qdrant", port=6333)
 ollama_api_url = "http://ollama:11434/api/embeddings"
+CORPUS_DIR = "corpus_data"
+os.makedirs(CORPUS_DIR, exist_ok=True)
+
+def get_corpus_path(collection_name: str) -> str:
+    return os.path.join(CORPUS_DIR, f"{collection_name}.json")
+
+def save_corpus(collection_name: str, corpus: list):
+    with open(get_corpus_path(collection_name), 'w', encoding='utf-8') as f:
+        json.dump(corpus, f, ensure_ascii=False, indent=4)
+
+def load_corpus(collection_name: str) -> list:
+    corpus_path = get_corpus_path(collection_name)
+    if os.path.exists(corpus_path):
+        with open(corpus_path, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    return []
 
 def create_collection(collection_name: str):
     try:
@@ -36,29 +50,14 @@ def create_collection(collection_name: str):
     except Exception:
         qdrant_client.recreate_collection(
             collection_name=collection_name,
-            vectors_config={
-                "text-dense": models.VectorParams(size=1024, distance=models.Distance.COSINE),
-            },
-            sparse_vectors_config={
-                "text-sparse": models.SparseVectorParams(
-                    index=models.SparseIndexParams(
-                        on_disk=False,
-                    )
-                )
-            },
+            vectors_config=models.VectorParams(size=1024, distance=models.Distance.COSINE),
         )
 
 async def get_embedding(text: str):
-    async with httpx.AsyncClient(timeout=300.0) as client:
+    async with httpx.AsyncClient(timeout=300.0) as client: 
         response = await client.post(ollama_api_url, json={"model": "bge-m3", "prompt": text})
         response.raise_for_status()
         return response.json()["embedding"]
-
-def preprocess_text(text: str) -> list[str]:
-    text = text.lower()
-    text = re.sub(r'[^\w\s]', '', text)  # Remove punctuation
-    return text.split()
-
 
 @app.post("/upload_processed_xlsx")
 async def upload_processed_xlsx(file: UploadFile = File(...), skip_rows: int = Form(...), mappings: str = Form(...), collection_name: str = Form(...)):
@@ -76,90 +75,61 @@ async def upload_processed_xlsx(file: UploadFile = File(...), skip_rows: int = F
         sheet = workbook.active
 
         documents = []
-        for row in sheet.iter_rows(min_row=skip_rows + 2, values_only=True):
+        corpus = load_corpus(collection_name)
+        
+        rows_to_process = list(sheet.iter_rows(min_row=skip_rows + 2, values_only=True))
+        points = []
+
+        for i, row in enumerate(rows_to_process):
             text_to_embed = f"Артикул - {row[mappings['Артикул']]}, Наименование - {row[mappings['Наименование']]}, Тариф с НДС, руб - {row[mappings['Тариф с НДС, руб']]}, Имя файла - {file.filename}"
             documents.append(text_to_embed)
-        
-        # Create BM25 model
-        processed_docs = [preprocess_text(doc) for doc in documents]
-        bm25_model = bm25.BM25(processed_docs)
-        
-        points = []
-        for i, (doc, processed_doc) in enumerate(zip(documents, processed_docs)):
-            # Dense vector
-            dense_vector = await get_embedding(doc)
-            
-            # Sparse vector
-            sparse_vector_indices, sparse_vector_values = bm25_model.get_doc_vector(processed_doc)
-            sparse_vector = models.SparseVector(indices=sparse_vector_indices.tolist(), values=sparse_vector_values.tolist())
-            
-            # Payload
-            row = list(sheet.iter_rows(min_row=skip_rows + 2, values_only=True))[i]
+            corpus.append(text_to_embed) # Add to corpus for BM25
+
+            embedding = await get_embedding(text_to_embed)
             payload = {}
             for header, col_idx in mappings.items():
                 payload[header] = row[col_idx]
             payload["Остаток"] = ""
-            
+
             points.append(models.PointStruct(
-                id=i,
-                vector={
-                    "text-dense": dense_vector,
-                    "text-sparse": sparse_vector
-                },
+                id=len(corpus) - len(rows_to_process) + i, # Ensure unique IDs
+                vector=embedding,
                 payload=payload
             ))
 
-        qdrant_client.upsert(
-            collection_name=collection_name,
-            wait=True,
-            points=points,
-        )
+        if points:
+            qdrant_client.upsert(
+                collection_name=collection_name,
+                wait=True,
+                points=points,
+            )
+        save_corpus(collection_name, corpus)
         return {"status": "success", "indexed_rows": len(documents)}
     except Exception as e:
         logger.error(f"Error processing file: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/search")
-async def search(query: str = Query(...), collection_name: str = Query(...)):
-    # Dense vector for semantic search
-    dense_vector = await get_embedding(query)
-
-    # Sparse vector for keyword search
-    processed_query = preprocess_text(query)
-    
-    # In a real application, you would load the bm25 model from a saved state.
-    # For simplicity, we are re-creating it here from all docs in the collection.
-    all_docs = qdrant_client.scroll(collection_name=collection_name, limit=10000, with_payload=True) # Adjust limit as needed
-    corpus = [point.payload["Наименование"] for point in all_docs[0]] # Or whatever field you used for BM25
-    processed_corpus = [preprocess_text(doc) for doc in corpus]
-    bm25_model = bm25.BM25(processed_corpus)
-    
-    sparse_vector_indices, sparse_vector_values = bm25_model.get_doc_vector(processed_query)
-    sparse_vector = models.SparseVector(indices=sparse_vector_indices.tolist(), values=sparse_vector_values.tolist())
-    
-    # Hybrid search
-    search_result = qdrant_client.search_batch(
+async def search(query: str, collection_name: str):
+    corpus = load_corpus(collection_name)
+    # Vector search
+    embedding = await get_embedding(query)
+    vector_search_result = qdrant_client.search(
         collection_name=collection_name,
-        requests=[
-            models.SearchRequest(
-                vector=models.NamedVector(
-                    name="text-dense",
-                    vector=dense_vector,
-                ),
-                limit=5,
-                with_payload=True,
-            ),
-             models.SearchRequest(
-                vector=models.NamedSparseVector(
-                    name="text-sparse",
-                    vector=sparse_vector,
-                ),
-                limit=5,
-                with_payload=True,
-            ),
-        ],
+        query_vector=embedding,
+        limit=5,
     )
 
-    # For simplicity, we're just returning the raw results from both searches.
-    # In a real application you would likely want to rerank/combine these results.
-    return {"dense_search_results": search_result[0], "sparse_search_results": search_result[1]}
+    # BM25 search
+    bm25_docs = []
+    if corpus:
+        tokenized_corpus = [doc.split(" ") for doc in corpus]
+        bm25 = BM25Okapi(tokenized_corpus)
+        tokenized_query = query.split(" ")
+        bm25_scores = bm25.get_scores(tokenized_query)
+        
+        # Combine results (simple approach: return top 5 from each)
+        bm25_results = sorted(range(len(bm25_scores)), key=lambda i: bm25_scores[i], reverse=True)[:5]
+        bm25_docs = [corpus[i] for i in bm25_results]
+
+    return {"vector_search_results": vector_search_result, "bm25_search_results": bm25_docs}
