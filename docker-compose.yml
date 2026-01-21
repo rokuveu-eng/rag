@@ -26,6 +26,8 @@ services:
     build: .
     ports:
       - "8424:9842"
+    volumes:
+      - ./hf_cache:/root/.cache/huggingface
     depends_on:
       - qdrant
       - ollama
