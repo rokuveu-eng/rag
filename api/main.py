@@ -141,6 +141,8 @@ async def upload_processed_xlsx(file: UploadFile = File(...), skip_rows: int = F
 
     try:
         mappings = json.loads(mappings)
+        if not mappings:
+            raise HTTPException(status_code=400, detail="Mappings cannot be empty")
         logger.info(f"Parsed mappings: {mappings}")
         contents = await file.read()
         workbook = openpyxl.load_workbook(io.BytesIO(contents))

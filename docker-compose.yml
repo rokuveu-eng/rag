@@ -10,6 +10,7 @@ services:
 
   ollama:
     image: ollama/ollama:latest
+    command: /bin/sh -c "ollama serve & ollama pull bge-m3 & wait"
     ports:
       - "11435:11434"
     volumes:
