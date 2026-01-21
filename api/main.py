@@ -13,10 +13,18 @@ import io
 import logging
 import re
 import asyncio
+import qdrant_client as qc
+import fastembed
+import fastapi
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+logger.info(f"Starting API...")
+logger.info(f"Qdrant Client version: {qc.__version__}")
+logger.info(f"FastEmbed version: {fastembed.__version__}")
+logger.info(f"FastAPI version: {fastapi.__version__}")
 
 app = FastAPI()
 
