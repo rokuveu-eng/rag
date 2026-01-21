@@ -154,26 +154,25 @@ async def search(query: str = Query(...), collection_name: str = Query(...)):
     )
     
     # Hybrid search
-    search_result = qdrant_client.search_batch(
+    # Performing two separate searches to support all Qdrant client versions (v1.x)
+    dense_search_result = qdrant_client.search(
         collection_name=collection_name,
-        requests=[
-            models.SearchRequest(
-                vector=models.NamedVector(
-                    name="text-dense",
-                    vector=dense_vector,
-                ),
-                limit=5,
-                with_payload=True,
-            ),
-             models.SearchRequest(
-                vector=models.NamedSparseVector(
-                    name="text-sparse",
-                    vector=sparse_vector,
-                ),
-                limit=5,
-                with_payload=True,
-            ),
-        ],
+        query_vector=models.NamedVector(
+            name="text-dense",
+            vector=dense_vector,
+        ),
+        limit=5,
+        with_payload=True,
     )
 
-    return {"dense_search_results": search_result[0], "sparse_search_results": search_result[1]}
+    sparse_search_result = qdrant_client.search(
+        collection_name=collection_name,
+        query_vector=models.NamedSparseVector(
+            name="text-sparse",
+            vector=sparse_vector,
+        ),
+        limit=5,
+        with_payload=True,
+    )
+
+    return {"dense_search_results": dense_search_result, "sparse_search_results": sparse_search_result}
