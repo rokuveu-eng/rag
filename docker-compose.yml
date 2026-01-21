@@ -25,7 +25,7 @@ services:
   api:
     build: .
     ports:
-      - "8424:8000"
+      - "8424:9842"
     depends_on:
       - qdrant
       - ollama
