@@ -7,6 +7,11 @@ from rank_bm25 import BM25Okapi
 import json
 import openpyxl
 import io
+import logging
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 app = FastAPI()
 
@@ -128,12 +133,15 @@ async def update_stock(file: UploadFile = File(...), stock_column: str = Form(..
 
 @app.post("/upload_processed_xlsx")
 async def upload_processed_xlsx(file: UploadFile = File(...), skip_rows: int = Form(...), mappings: str = Form(...), collection_name: str = Form(...)):
+    logger.info(f"Received request to /upload_processed_xlsx for collection: {collection_name}")
+    logger.info(f"skip_rows: {skip_rows}, mappings: {mappings}")
     create_collection(collection_name)
     corpus = load_corpus(collection_name)
     corpus_file = f"/app/{collection_name}_corpus.json"
 
     try:
         mappings = json.loads(mappings)
+        logger.info(f"Parsed mappings: {mappings}")
         contents = await file.read()
         workbook = openpyxl.load_workbook(io.BytesIO(contents))
         sheet = workbook.active
@@ -169,6 +177,7 @@ async def upload_processed_xlsx(file: UploadFile = File(...), skip_rows: int = F
         )
         return {"status": "success", "indexed_rows": len(new_chunks)}
     except Exception as e:
+        logger.error(f"Error processing file: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/search")
