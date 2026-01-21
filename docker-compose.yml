@@ -10,8 +10,6 @@ services:
 
   ollama:
     image: ollama/ollama:latest
-    entrypoint: /bin/sh
-    command: -c "ollama serve & sleep 5 && ollama pull bge-m3 && wait"
     ports:
       - "11435:11434"
     volumes:
