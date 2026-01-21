@@ -31,7 +31,7 @@ def create_collection(collection_name: str):
     except Exception:
         qdrant_client.recreate_collection(
             collection_name=collection_name,
-            vectors_config=models.VectorParams(size=4096, distance=models.Distance.COSINE),
+            vectors_config=models.VectorParams(size=1024, distance=models.Distance.COSINE),
         )
 
 def load_corpus(collection_name: str):
