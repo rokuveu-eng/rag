@@ -14,7 +14,7 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 
 @app.get("/", response_class=HTMLResponse)
 async def read_root():
-    with open("api/static/index.html") as f:
+    with open("static/index.html") as f:
         return f.read()
 
 qdrant_client = QdrantClient(host="qdrant", port=6333)
