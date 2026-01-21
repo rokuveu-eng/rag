@@ -9,7 +9,7 @@
 - `api/`: Директория с кодом API.
   - `main.py`: Основной файл с FastAPI-приложением.
 - `static/`: директория с файлами для веб-интерфейса.
-  - `requirements.txt`: Файл с зависимостями Python.
+- `requirements.txt`: Файл с зависимостями Python.
 - `README.md`: Инструкция по использованию проекта.
 
 ## Инструкция по использованию
@@ -30,7 +30,7 @@
 
 **Пример с использованием `curl`:**
 ```bash
-curl -X POST -F "file=@/путь/к/вашему/файлу.xlsx" -F "collection_name=my_collection" http://localhost:8000/upload_processed_xlsx
+curl -X POST -F "file=@/путь/к/вашему/файлу.xlsx" -F "collection_name=my_collection" http://localhost:8424/upload_processed_xlsx
 ```
 
 **Требования к файлу:**
@@ -57,7 +57,7 @@ curl -X POST -F "file=@/путь/к/файлу/остатков.xlsx" -F "stock_
 
 **Пример с использованием `curl`:**
 ```bash
-curl -X GET "http://localhost:8000/search?query=ваш поисковый запрос&collection_name=my_collection"
+curl -X GET "http://localhost:8424/search?query=ваш поисковый запрос&collection_name=my_collection"
 ```
 
 **Ответ:**
