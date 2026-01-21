@@ -43,7 +43,7 @@ def load_corpus(collection_name: str):
         return []
 
 async def get_embedding(text: str):
-    async with httpx.AsyncClient() as client:
+    async with httpx.AsyncClient(timeout=300.0) as client: # Set timeout to 5 minutes
         response = await client.post(ollama_api_url, json={"model": "bge-m3", "prompt": text})
         response.raise_for_status()
         return response.json()["embedding"]
