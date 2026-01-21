@@ -162,29 +162,27 @@ async def search(query: str = Query(...), collection_name: str = Query(...)):
     )
     
     # Hybrid search using Query API (Prefetch + Fusion RRF) - Requires qdrant-client >= 1.10.0
-    search_result = qdrant_client.query_points(
-        collection_name=collection_name,
-        prefetch=[
-            models.Prefetch(
-                query=models.NamedSparseVector(
-                    name="text-sparse",
-                    vector=sparse_vector,
+    try:
+        search_result = qdrant_client.query_points(
+            collection_name=collection_name,
+            prefetch=[
+                models.Prefetch(
+                    query=sparse_vector,
+                    using="text-sparse",
+                    limit=20,
                 ),
-                using="text-sparse",
-                limit=20,
-            ),
-            models.Prefetch(
-                query=models.NamedVector(
-                    name="text-dense",
-                    vector=dense_vector,
+                models.Prefetch(
+                    query=dense_vector,
+                    using="text-dense",
+                    limit=20,
                 ),
-                using="text-dense",
-                limit=20,
-            ),
-        ],
-        query=models.FusionQuery(fusion=models.Fusion.RRF),
-        limit=10, 
-        with_payload=True,
-    )
-
-    return {"results": search_result.points}
+            ],
+            query=models.FusionQuery(fusion=models.Fusion.RRF),
+            limit=10,
+            with_payload=True,
+        )
+        return {"results": search_result.points}
+    except Exception as e:
+        logger.error(f"Search failed: {e}", exc_info=True)
+        # Return error details to the client for easier debugging
+        raise HTTPException(status_code=500, detail=str(e))
