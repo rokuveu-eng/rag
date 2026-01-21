@@ -190,18 +190,19 @@ async def search(query: str, collection_name: str):
     vector_search_result = qdrant_client.search(
         collection_name=collection_name,
         query_vector=embedding,
-        limit=5, 
+        limit=5,
     )
 
     # BM25 search
-    tokenized_corpus = [doc.split(" ") for doc in corpus]
-    bm25 = BM25Okapi(tokenized_corpus)
-    tokenized_query = query.split(" ")
-    bm25_scores = bm25.get_scores(tokenized_query)
-    
-    # Combine results (simple approach: return top 5 from each)
-    bm25_results = sorted(range(len(bm25_scores)), key=lambda i: bm25_scores[i], reverse=True)[:5]
-    bm25_docs = [corpus[i] for i in bm25_results]
-    
+    bm25_docs = []
+    if corpus:
+        tokenized_corpus = [doc.split(" ") for doc in corpus]
+        bm25 = BM25Okapi(tokenized_corpus)
+        tokenized_query = query.split(" ")
+        bm25_scores = bm25.get_scores(tokenized_query)
+        
+        # Combine results (simple approach: return top 5 from each)
+        bm25_results = sorted(range(len(bm25_scores)), key=lambda i: bm25_scores[i], reverse=True)[:5]
+        bm25_docs = [corpus[i] for i in bm25_results]
 
     return {"vector_search_results": vector_search_result, "bm25_search_results": bm25_docs}
