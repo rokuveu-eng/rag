@@ -153,26 +153,30 @@ async def search(query: str = Query(...), collection_name: str = Query(...)):
         values=sparse_vector_gen.values.tolist()
     )
     
-    # Hybrid search
-    # Performing two separate searches to support all Qdrant client versions (v1.x)
-    dense_search_result = qdrant_client.search(
+    # Hybrid search using Query API (Prefetch + Fusion RRF) - Requires qdrant-client >= 1.10.0
+    search_result = qdrant_client.query_points(
         collection_name=collection_name,
-        query_vector=models.NamedVector(
-            name="text-dense",
-            vector=dense_vector,
-        ),
-        limit=5,
+        prefetch=[
+            models.Prefetch(
+                query=models.NamedSparseVector(
+                    name="text-sparse",
+                    vector=sparse_vector,
+                ),
+                using="text-sparse",
+                limit=20,
+            ),
+            models.Prefetch(
+                query=models.NamedVector(
+                    name="text-dense",
+                    vector=dense_vector,
+                ),
+                using="text-dense",
+                limit=20,
+            ),
+        ],
+        query=models.FusionQuery(fusion=models.Fusion.RRF),
+        limit=10, 
         with_payload=True,
     )
 
-    sparse_search_result = qdrant_client.search(
-        collection_name=collection_name,
-        query_vector=models.NamedSparseVector(
-            name="text-sparse",
-            vector=sparse_vector,
-        ),
-        limit=5,
-        with_payload=True,
-    )
-
-    return {"dense_search_results": dense_search_result, "sparse_search_results": sparse_search_result}
+    return {"results": search_result.points}
