@@ -1,13 +1,18 @@
-from fastapi import FastAPI, HTTPException, UploadFile, File, Form
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Query
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse
 from qdrant_client import QdrantClient, models
+from qdrant_client.http.models import UpdateStatus
 import httpx
-from rank_bm25 import BM25Okapi
+from sparse_dot_bm25 import bm25
+import numpy as np
 import json
 import openpyxl
 import io
 import logging
+import re
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -31,114 +36,36 @@ def create_collection(collection_name: str):
     except Exception:
         qdrant_client.recreate_collection(
             collection_name=collection_name,
-            vectors_config=models.VectorParams(size=1024, distance=models.Distance.COSINE),
+            vectors_config={
+                "text-dense": models.VectorParams(size=1024, distance=models.Distance.COSINE),
+            },
+            sparse_vectors_config={
+                "text-sparse": models.SparseVectorParams(
+                    index=models.SparseIndexParams(
+                        on_disk=False,
+                    )
+                )
+            },
         )
 
-def load_corpus(collection_name: str):
-    corpus_file = f"/app/{collection_name}_corpus.json"
-    try:
-        with open(corpus_file, 'r') as f:
-            return json.load(f)
-    except FileNotFoundError:
-        return []
-
 async def get_embedding(text: str):
-    async with httpx.AsyncClient(timeout=300.0) as client: # Set timeout to 5 minutes
+    async with httpx.AsyncClient(timeout=300.0) as client:
         response = await client.post(ollama_api_url, json={"model": "bge-m3", "prompt": text})
         response.raise_for_status()
         return response.json()["embedding"]
 
-@app.post("/upload_xlsx")
-async def upload_xlsx(file: UploadFile = File(...)):
-    global corpus
-    try:
-        contents = await file.read()
-        workbook = openpyxl.load_workbook(io.BytesIO(contents))
-        sheet = workbook.active
+def preprocess_text(text: str) -> list[str]:
+    text = text.lower()
+    text = re.sub(r'[^\w\s]', '', text)  # Remove punctuation
+    return text.split()
 
-        headers = [cell.value for cell in sheet[1]]
-        
-        points = []
-        new_chunks = []
-
-        for row_idx, row in enumerate(sheet.iter_rows(min_row=2, values_only=True)):
-            row_data = dict(zip(headers, row))
-
-            # Create text for embedding and BM25
-            text_to_embed = f"Артикул - {row_data.get('Артикул')}, Наименование - {row_data.get('Наименование')}, Тариф с НДС, руб - {row_data.get('Тариф с НДС, руб')}, Имя файла - {file.filename}"
-            new_chunks.append(text_to_embed)
-
-            # Create payload
-            payload = row_data
-            payload["Остаток"] = ""
-
-            embedding = await get_embedding(text_to_embed)
-            points.append(models.PointStruct(id=len(corpus) + row_idx, vector=embedding, payload=payload))
-
-        corpus.extend(new_chunks)
-        with open(corpus_file, 'w') as f:
-            json.dump(corpus, f)
-
-        qdrant_client.upsert(
-            collection_name=collection_name,
-            wait=True,
-            points=points,
-        )
-        return {"status": "success", "indexed_rows": len(new_chunks)}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.post("/update_stock")
-async def update_stock(file: UploadFile = File(...), stock_column: str = Form(...)):
-    try:
-        contents = await file.read()
-        workbook = openpyxl.load_workbook(io.BytesIO(contents))
-        sheet = workbook.active
-
-        headers = [cell.value for cell in sheet[1]]
-        if stock_column not in headers:
-            raise HTTPException(status_code=400, detail=f"Column '{stock_column}' not found in the file.")
-
-        for row in sheet.iter_rows(min_row=2, values_only=True):
-            row_data = dict(zip(headers, row))
-            article = row_data.get("Артикул")
-            stock_value = row_data.get(stock_column)
-
-            if article:
-                # Find points with the matching article
-                search_result = qdrant_client.scroll(
-                    collection_name=collection_name,
-                    scroll_filter=models.Filter(
-                        must=[
-                            models.FieldCondition(
-                                key="Артикул",
-                                match=models.MatchValue(value=article),
-                            )
-                        ]
-                    ),
-                    limit=1
-                )
-                if search_result[0]:
-                    point_id = search_result[0][0].id
-                    qdrant_client.set_payload(
-                        collection_name=collection_name,
-                        payload={"Остаток": stock_value},
-                        points=[point_id],
-                        wait=True
-                    )
-
-        return {"status": "success"}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/upload_processed_xlsx")
 async def upload_processed_xlsx(file: UploadFile = File(...), skip_rows: int = Form(...), mappings: str = Form(...), collection_name: str = Form(...)):
     logger.info(f"Received request to /upload_processed_xlsx for collection: {collection_name}")
     logger.info(f"skip_rows: {skip_rows}, mappings: {mappings}")
     create_collection(collection_name)
-    corpus = load_corpus(collection_name)
-    corpus_file = f"/app/{collection_name}_corpus.json"
-
+    
     try:
         mappings = json.loads(mappings)
         if not mappings:
@@ -148,61 +75,91 @@ async def upload_processed_xlsx(file: UploadFile = File(...), skip_rows: int = F
         workbook = openpyxl.load_workbook(io.BytesIO(contents))
         sheet = workbook.active
 
-        _ = [cell.value for cell in sheet[1]]
+        documents = []
+        for row in sheet.iter_rows(min_row=skip_rows + 2, values_only=True):
+            text_to_embed = f"Артикул - {row[mappings['Артикул']]}, Наименование - {row[mappings['Наименование']]}, Тариф с НДС, руб - {row[mappings['Тариф с НДС, руб']]}, Имя файла - {file.filename}"
+            documents.append(text_to_embed)
+        
+        # Create BM25 model
+        processed_docs = [preprocess_text(doc) for doc in documents]
+        bm25_model = bm25.BM25(processed_docs)
         
         points = []
-        new_chunks = []
-
-        for row_idx, row in enumerate(sheet.iter_rows(min_row=skip_rows + 2, values_only=True)):
+        for i, (doc, processed_doc) in enumerate(zip(documents, processed_docs)):
+            # Dense vector
+            dense_vector = await get_embedding(doc)
             
-            # Create text for embedding and BM25
-            text_to_embed = f"Артикул - {row[mappings['Артикул']]}, Наименование - {row[mappings['Наименование']]}, ариф с НДС, руб - {row[mappings['Тариф с НДС, руб']]}, Имя файла - {file.filename}"
-            new_chunks.append(text_to_embed)
-
-            # Create payload
+            # Sparse vector
+            sparse_vector_indices, sparse_vector_values = bm25_model.get_doc_vector(processed_doc)
+            sparse_vector = models.SparseVector(indices=sparse_vector_indices.tolist(), values=sparse_vector_values.tolist())
+            
+            # Payload
+            row = list(sheet.iter_rows(min_row=skip_rows + 2, values_only=True))[i]
             payload = {}
             for header, col_idx in mappings.items():
                 payload[header] = row[col_idx]
             payload["Остаток"] = ""
-
-            embedding = await get_embedding(text_to_embed)
-            points.append(models.PointStruct(id=len(corpus) + row_idx, vector=embedding, payload=payload))
-
-        corpus.extend(new_chunks)
-        with open(corpus_file, 'w') as f:
-            json.dump(corpus, f)
+            
+            points.append(models.PointStruct(
+                id=i,
+                vector={
+                    "text-dense": dense_vector,
+                    "text-sparse": sparse_vector
+                },
+                payload=payload
+            ))
 
         qdrant_client.upsert(
             collection_name=collection_name,
             wait=True,
             points=points,
         )
-        return {"status": "success", "indexed_rows": len(new_chunks)}
+        return {"status": "success", "indexed_rows": len(documents)}
     except Exception as e:
         logger.error(f"Error processing file: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/search")
-async def search(query: str, collection_name: str):
-    corpus = load_corpus(collection_name)
-    # Vector search
-    embedding = await get_embedding(query)
-    vector_search_result = qdrant_client.search(
+async def search(query: str = Query(...), collection_name: str = Query(...)):
+    # Dense vector for semantic search
+    dense_vector = await get_embedding(query)
+
+    # Sparse vector for keyword search
+    processed_query = preprocess_text(query)
+    
+    # In a real application, you would load the bm25 model from a saved state.
+    # For simplicity, we are re-creating it here from all docs in the collection.
+    all_docs = qdrant_client.scroll(collection_name=collection_name, limit=10000, with_payload=True) # Adjust limit as needed
+    corpus = [point.payload["Наименование"] for point in all_docs[0]] # Or whatever field you used for BM25
+    processed_corpus = [preprocess_text(doc) for doc in corpus]
+    bm25_model = bm25.BM25(processed_corpus)
+    
+    sparse_vector_indices, sparse_vector_values = bm25_model.get_doc_vector(processed_query)
+    sparse_vector = models.SparseVector(indices=sparse_vector_indices.tolist(), values=sparse_vector_values.tolist())
+    
+    # Hybrid search
+    search_result = qdrant_client.search_batch(
         collection_name=collection_name,
-        query_vector=embedding,
-        limit=5,
+        requests=[
+            models.SearchRequest(
+                vector=models.NamedVector(
+                    name="text-dense",
+                    vector=dense_vector,
+                ),
+                limit=5,
+                with_payload=True,
+            ),
+             models.SearchRequest(
+                vector=models.NamedSparseVector(
+                    name="text-sparse",
+                    vector=sparse_vector,
+                ),
+                limit=5,
+                with_payload=True,
+            ),
+        ],
     )
 
-    # BM25 search
-    bm25_docs = []
-    if corpus:
-        tokenized_corpus = [doc.split(" ") for doc in corpus]
-        bm25 = BM25Okapi(tokenized_corpus)
-        tokenized_query = query.split(" ")
-        bm25_scores = bm25.get_scores(tokenized_query)
-        
-        # Combine results (simple approach: return top 5 from each)
-        bm25_results = sorted(range(len(bm25_scores)), key=lambda i: bm25_scores[i], reverse=True)[:5]
-        bm25_docs = [corpus[i] for i in bm25_results]
-
-    return {"vector_search_results": vector_search_result, "bm25_search_results": bm25_docs}
+    # For simplicity, we're just returning the raw results from both searches.
+    # In a real application you would likely want to rerank/combine these results.
+    return {"dense_search_results": search_result[0], "sparse_search_results": search_result[1]}
