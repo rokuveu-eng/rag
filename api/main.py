@@ -18,6 +18,7 @@ import qdrant_client as qc
 import fastembed
 import fastapi
 import importlib.metadata
+from time import perf_counter
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -167,9 +168,12 @@ async def upload_processed_xlsx(
     mappings: str = Form(...),
     collection_name: str = Form(...),
     batch_size: int = Form(16),
+    points_batch_size: int = Form(200),
 ):
     logger.info(f"Received request to /upload_processed_xlsx for collection: {collection_name}")
-    logger.info(f"skip_rows: {skip_rows}, mappings: {mappings}, batch_size: {batch_size}")
+    logger.info(
+        f"skip_rows: {skip_rows}, mappings: {mappings}, batch_size: {batch_size}, points_batch_size: {points_batch_size}"
+    )
     create_collection(collection_name)
 
     try:
@@ -198,26 +202,35 @@ async def upload_processed_xlsx(
             )
             documents.append(text_to_embed)
 
-        points = []
+        if points_batch_size <= 0:
+            raise HTTPException(status_code=400, detail="points_batch_size must be > 0")
 
-        # Batch generation for sparse embeddings (FastEmbed is already efficient)
-        sparse_vectors = list(sparse_embedding_model.embed(documents))
+        total_start = perf_counter()
+        indexed_rows = 0
+        total_rows = len(documents)
 
         # Batch dense embeddings via Ollama
         for start in range(0, len(documents), batch_size):
             batch_docs = documents[start : start + batch_size]
-            dense_vectors = await get_ollama_embeddings(batch_docs)
+            batch_rows = rows[start : start + batch_size]
 
+            embed_start = perf_counter()
+            dense_task = asyncio.create_task(get_ollama_embeddings(batch_docs))
+            sparse_vectors = list(sparse_embedding_model.embed(batch_docs))
+            dense_vectors = await dense_task
+            embed_duration = perf_counter() - embed_start
+
+            batch_points = []
             for offset, dense_vector in enumerate(dense_vectors):
                 i = start + offset
-                sparse_vector = sparse_vectors[i]
+                sparse_vector = sparse_vectors[offset]
 
                 qdrant_sparse_vector = models.SparseVector(
                     indices=sparse_vector.indices.tolist(),
                     values=sparse_vector.values.tolist(),
                 )
 
-                row_data = rows[i]
+                row_data = batch_rows[offset]
                 payload = {}
                 for header, col_idx in mappings.items():
                     if col_idx < len(row_data):
@@ -225,7 +238,7 @@ async def upload_processed_xlsx(
                 payload["Остаток"] = ""
                 payload["Имя файла"] = file.filename
 
-                points.append(
+                batch_points.append(
                     models.PointStruct(
                         id=i,
                         vector={
@@ -236,12 +249,47 @@ async def upload_processed_xlsx(
                     )
                 )
 
-        qdrant_client.upsert(
-            collection_name=collection_name,
-            wait=True,
-            points=points,
-        )
-        return {"status": "success", "indexed_rows": len(documents)}
+            upsert_start = perf_counter()
+            for chunk_start in range(0, len(batch_points), points_batch_size):
+                chunk = batch_points[chunk_start : chunk_start + points_batch_size]
+                qdrant_client.upsert(
+                    collection_name=collection_name,
+                    wait=True,
+                    points=chunk,
+                )
+                indexed_rows += len(chunk)
+
+                elapsed = perf_counter() - total_start
+                rate = indexed_rows / elapsed if elapsed > 0 else 0
+                remaining = total_rows - indexed_rows
+                eta = remaining / rate if rate > 0 else 0
+                percent = (indexed_rows / total_rows) * 100 if total_rows else 100
+
+                logger.info(
+                    "Progress: %s/%s (%.1f%%), %.2f rows/sec, ETA %.1fs",
+                    indexed_rows,
+                    total_rows,
+                    percent,
+                    rate,
+                    eta,
+                )
+            upsert_duration = perf_counter() - upsert_start
+
+            logger.info(
+                "Batch %s-%s: embeddings %.2fs, upsert %.2fs",
+                start,
+                start + len(batch_docs) - 1,
+                embed_duration,
+                upsert_duration,
+            )
+
+        total_duration = perf_counter() - total_start
+        logger.info("Indexed %s rows in %.2fs", indexed_rows, total_duration)
+        return {
+            "status": "success",
+            "indexed_rows": indexed_rows,
+            "duration_sec": round(total_duration, 3),
+        }
     except Exception as e:
         logger.error(f"Error processing file: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
