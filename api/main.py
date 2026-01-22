@@ -259,7 +259,7 @@ async def process_xlsx_upload(
             for header, col_idx in mappings.items():
                 if col_idx < len(row_data):
                     payload[header] = row_data[col_idx]
-            payload["Остаток"] = ""
+            payload["Остаток"] = 0
             payload["Имя файла"] = file_name
 
             batch_points.append(
