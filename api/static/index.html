@@ -125,6 +125,31 @@
             gap: 12px;
             align-items: center;
         }
+        .tabs {
+            display: flex;
+            gap: 12px;
+            margin-top: 24px;
+        }
+        .tab-button {
+            background: #e0e7ff;
+            color: #1e3a8a;
+            padding: 10px 16px;
+            border-radius: 999px;
+            border: none;
+            font-weight: 600;
+            cursor: pointer;
+        }
+        .tab-button.active {
+            background: #4f46e5;
+            color: #fff;
+        }
+        .tab-content {
+            display: none;
+            margin-top: 24px;
+        }
+        .tab-content.active {
+            display: block;
+        }
     </style>
 </head>
 <body>
@@ -132,47 +157,94 @@
         <h1>Загрузка и обработка XLSX</h1>
         <p class="subtitle">Подготовьте файл, сопоставьте столбцы и загрузите данные в Qdrant.</p>
 
-        <div class="grid">
-            <div>
-                <label for="collection-name">Имя коллекции</label>
-                <input type="text" id="collection-name" value="my_collection">
-                <div class="hint">Коллекция будет создана автоматически, если её нет.</div>
+        <div class="tabs">
+            <button class="tab-button active" data-tab="index">Основная загрузка</button>
+            <button class="tab-button" data-tab="stock">Остатки</button>
+        </div>
+
+        <div class="tab-content active" id="tab-index">
+            <div class="grid">
+                <div>
+                    <label for="collection-name">Имя коллекции</label>
+                    <input type="text" id="collection-name" value="my_collection">
+                    <div class="hint">Коллекция будет создана автоматически, если её нет.</div>
+                </div>
+                <div>
+                    <label for="skip-rows">Пропустить верхние строки</label>
+                    <input type="number" id="skip-rows" value="0" min="0">
+                    <div class="hint">Количество строк перед заголовками.</div>
+                </div>
+                <div>
+                    <label for="batch-size">Batch size</label>
+                    <input type="number" id="batch-size" value="16" min="1" max="128">
+                    <div class="hint">Размер пачки для Ollama embeddings.</div>
+                </div>
+                <div>
+                    <label for="points-batch-size">Points batch size</label>
+                    <input type="number" id="points-batch-size" value="200" min="1" max="5000">
+                    <div class="hint">Размер чанка для записи в Qdrant.</div>
+                </div>
+                <div>
+                    <label for="xlsx-file">XLSX файл</label>
+                    <input type="file" id="xlsx-file" accept=".xlsx" />
+                    <div class="hint">Поддерживается только .xlsx.</div>
+                </div>
             </div>
-            <div>
-                <label for="skip-rows">Пропустить верхние строки</label>
-                <input type="number" id="skip-rows" value="0" min="0">
-                <div class="hint">Количество строк перед заголовками.</div>
+
+            <div class="section">
+                <button id="process-file">Считать заголовки</button>
+                <div class="status" id="status-text">Статус: ожидание файла.</div>
+                <div class="progress-bar">
+                    <div class="progress-fill" id="progress-fill"></div>
+                </div>
+                <div class="log-output" id="log-output">Логи загрузки появятся здесь.</div>
             </div>
-            <div>
-                <label for="batch-size">Batch size</label>
-                <input type="number" id="batch-size" value="16" min="1" max="128">
-                <div class="hint">Размер пачки для Ollama embeddings.</div>
-            </div>
-            <div>
-                <label for="points-batch-size">Points batch size</label>
-                <input type="number" id="points-batch-size" value="200" min="1" max="5000">
-                <div class="hint">Размер чанка для записи в Qdrant.</div>
-            </div>
-            <div>
-                <label for="xlsx-file">XLSX файл</label>
-                <input type="file" id="xlsx-file" accept=".xlsx" />
-                <div class="hint">Поддерживается только .xlsx.</div>
+
+            <div class="section">
+                <h2>Сопоставление столбцов</h2>
+                <div id="column-mappings" class="mappings"></div>
+                <button id="upload-data" style="display:none;">Загрузить данные</button>
             </div>
         </div>
 
-        <div class="section">
-            <button id="process-file">Считать заголовки</button>
-            <div class="status" id="status-text">Статус: ожидание файла.</div>
-            <div class="progress-bar">
-                <div class="progress-fill" id="progress-fill"></div>
+        <div class="tab-content" id="tab-stock">
+            <div class="grid">
+                <div>
+                    <label for="stock-collection-name">Имя коллекции</label>
+                    <input type="text" id="stock-collection-name" value="my_collection">
+                    <div class="hint">Запись только в payload поля "Остаток".</div>
+                </div>
+                <div>
+                    <label for="stock-skip-rows">Пропустить верхние строки</label>
+                    <input type="number" id="stock-skip-rows" value="0" min="0">
+                    <div class="hint">Количество строк перед заголовками.</div>
+                </div>
+                <div>
+                    <label for="stock-batch-size">Batch size</label>
+                    <input type="number" id="stock-batch-size" value="200" min="1" max="2000">
+                    <div class="hint">Размер пачки для обновления остатков.</div>
+                </div>
+                <div>
+                    <label for="stock-xlsx-file">XLSX файл</label>
+                    <input type="file" id="stock-xlsx-file" accept=".xlsx" />
+                    <div class="hint">Колонки выбираются вручную.</div>
+                </div>
             </div>
-            <div class="log-output" id="log-output">Логи загрузки появятся здесь.</div>
-        </div>
 
-        <div class="section">
-            <h2>Сопоставление столбцов</h2>
-            <div id="column-mappings" class="mappings"></div>
-            <button id="upload-data" style="display:none;">Загрузить данные</button>
+            <div class="section">
+                <button id="stock-process-file">Считать заголовки</button>
+                <div class="status" id="stock-status-text">Статус: ожидание файла.</div>
+                <div class="progress-bar">
+                    <div class="progress-fill" id="stock-progress-fill"></div>
+                </div>
+                <div class="log-output" id="stock-log-output">Логи обновления появятся здесь.</div>
+            </div>
+
+            <div class="section">
+                <h2>Сопоставление столбцов</h2>
+                <div id="stock-column-mappings" class="mappings"></div>
+                <button id="stock-upload-data" style="display:none;">Обновить остатки</button>
+            </div>
         </div>
     </div>
 

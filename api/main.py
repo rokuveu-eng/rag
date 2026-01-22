@@ -51,6 +51,7 @@ async def read_root():
 
 qdrant_client = QdrantClient(host=os.getenv("QDRANT_HOST", "qdrant"), port=int(os.getenv("QDRANT_PORT", "6333")))
 upload_jobs = {}
+stock_jobs = {}
 
 def default_ollama_base_url():
     if os.path.exists("/.dockerenv"):
@@ -443,6 +444,218 @@ async def upload_status(job_id: str):
     if job_id not in upload_jobs:
         raise HTTPException(status_code=404, detail="Job not found")
     return upload_jobs[job_id]
+
+
+async def process_stock_upload(
+    *,
+    contents: bytes,
+    skip_rows: int,
+    article_col: int,
+    stock_col: int,
+    collection_name: str,
+    job_id: str = None,
+    batch_size: int = 200,
+):
+    workbook = openpyxl.load_workbook(io.BytesIO(contents))
+    sheet = workbook.active
+
+    rows = list(sheet.iter_rows(min_row=skip_rows + 2, values_only=True))
+    total_rows = len(rows)
+    processed = 0
+    updated = 0
+    skipped = 0
+    total_start = perf_counter()
+
+    if job_id:
+        stock_jobs[job_id].update(
+            {
+                "status": "running",
+                "progress": 0,
+                "processed_rows": 0,
+                "updated_rows": 0,
+                "skipped_rows": 0,
+                "total_rows": total_rows,
+                "rate": 0,
+                "eta": None,
+            }
+        )
+
+    for start in range(0, total_rows, batch_size):
+        batch_rows = rows[start : start + batch_size]
+        batch_articles = []
+        batch_payloads = {}
+
+        for row in batch_rows:
+            article = row[article_col] if article_col < len(row) else None
+            stock_value = row[stock_col] if stock_col < len(row) else None
+            if article is None:
+                skipped += 1
+                continue
+            article_str = str(article).strip()
+            if not article_str:
+                skipped += 1
+                continue
+            batch_articles.append(article_str)
+            batch_payloads[article_str] = stock_value
+
+        if not batch_articles:
+            processed += len(batch_rows)
+            continue
+
+        matched_points = qdrant_client.scroll(
+            collection_name=collection_name,
+            scroll_filter=models.Filter(
+                must=[
+                    models.FieldCondition(
+                        key="Артикул",
+                        match=models.MatchAny(any=batch_articles),
+                    )
+                ]
+            ),
+            limit=len(batch_articles),
+            with_payload=True,
+            with_vectors=False,
+        )[0]
+
+        update_points = []
+        found_articles = set()
+        for point in matched_points:
+            article_value = point.payload.get("Артикул")
+            if article_value is None:
+                continue
+            article_str = str(article_value)
+            found_articles.add(article_str)
+            payload = dict(point.payload)
+            payload["Остаток"] = batch_payloads.get(article_str)
+            update_points.append(models.PointStruct(id=point.id, payload=payload, vector={}))
+
+        missing_articles = set(batch_articles) - found_articles
+        skipped += len(missing_articles)
+
+        if update_points:
+            safe_upsert(collection_name, update_points)
+            updated += len(update_points)
+
+        processed += len(batch_rows)
+        elapsed = perf_counter() - total_start
+        rate = processed / elapsed if elapsed > 0 else 0
+        remaining = total_rows - processed
+        eta = remaining / rate if rate > 0 else 0
+        percent = (processed / total_rows) * 100 if total_rows else 100
+
+        logger.info(
+            "Stock progress: %s/%s (%.1f%%), %.2f rows/sec, ETA %.1fs",
+            processed,
+            total_rows,
+            percent,
+            rate,
+            eta,
+        )
+
+        if job_id:
+            stock_jobs[job_id].update(
+                {
+                    "status": "running",
+                    "progress": round(percent, 2),
+                    "processed_rows": processed,
+                    "updated_rows": updated,
+                    "skipped_rows": skipped,
+                    "total_rows": total_rows,
+                    "rate": round(rate, 2),
+                    "eta": round(eta, 1),
+                }
+            )
+
+    duration = perf_counter() - total_start
+    result = {
+        "status": "success",
+        "processed_rows": processed,
+        "updated_rows": updated,
+        "skipped_rows": skipped,
+        "duration_sec": round(duration, 3),
+    }
+
+    if job_id:
+        stock_jobs[job_id].update(
+            {
+                "status": "completed",
+                "progress": 100,
+                "processed_rows": processed,
+                "updated_rows": updated,
+                "skipped_rows": skipped,
+                "duration_sec": round(duration, 3),
+            }
+        )
+
+    return result
+
+
+async def run_stock_job(
+    *,
+    job_id: str,
+    contents: bytes,
+    skip_rows: int,
+    article_col: int,
+    stock_col: int,
+    collection_name: str,
+    batch_size: int,
+):
+    try:
+        await process_stock_upload(
+            contents=contents,
+            skip_rows=skip_rows,
+            article_col=article_col,
+            stock_col=stock_col,
+            collection_name=collection_name,
+            job_id=job_id,
+            batch_size=batch_size,
+        )
+    except Exception as exc:
+        logger.error("Stock upload job failed: %s", exc, exc_info=True)
+        stock_jobs[job_id].update({"status": "failed", "error": str(exc)})
+
+
+@app.post("/upload_stock_async")
+async def upload_stock_async(
+    file: UploadFile = File(...),
+    skip_rows: int = Form(...),
+    article_col: int = Form(...),
+    stock_col: int = Form(...),
+    collection_name: str = Form(...),
+    batch_size: int = Form(200),
+):
+    logger.info(f"Received request to /upload_stock_async for collection: {collection_name}")
+    logger.info(
+        f"skip_rows: {skip_rows}, article_col: {article_col}, stock_col: {stock_col}, batch_size: {batch_size}"
+    )
+
+    try:
+        contents = await file.read()
+    except Exception as e:
+        logger.error(f"Error reading stock file: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+    job_id = str(uuid.uuid4())
+    stock_jobs[job_id] = {"status": "queued", "progress": 0}
+    asyncio.create_task(
+        run_stock_job(
+            job_id=job_id,
+            contents=contents,
+            skip_rows=skip_rows,
+            article_col=article_col,
+            stock_col=stock_col,
+            collection_name=collection_name,
+            batch_size=batch_size,
+        )
+    )
+    return {"status": "started", "job_id": job_id}
+
+
+@app.get("/stock_status/{job_id}")
+async def stock_status(job_id: str):
+    if job_id not in stock_jobs:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return stock_jobs[job_id]
 
 @app.get("/search")
 async def search(query: str = Query(...), collection_name: str = Query(...)):
