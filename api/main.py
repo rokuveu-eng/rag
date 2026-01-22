@@ -446,6 +446,19 @@ async def upload_status(job_id: str):
     return upload_jobs[job_id]
 
 
+def normalize_article(value) -> str:
+    if value is None:
+        return ""
+    text = str(value).strip()
+    if text.startswith('="') and text.endswith('"'):
+        text = text[2:-1]
+    if text.startswith("=") and text.endswith('"'):
+        text = text[1:-1]
+    if text.startswith('"') and text.endswith('"'):
+        text = text[1:-1]
+    return text.strip()
+
+
 async def process_stock_upload(
     *,
     contents: bytes,
@@ -491,7 +504,7 @@ async def process_stock_upload(
             if article is None:
                 skipped += 1
                 continue
-            article_str = str(article).strip()
+            article_str = normalize_article(article)
             if not article_str:
                 skipped += 1
                 continue
@@ -523,7 +536,7 @@ async def process_stock_upload(
             article_value = point.payload.get("Артикул")
             if article_value is None:
                 continue
-            article_str = str(article_value)
+            article_str = normalize_article(article_value)
             found_articles.add(article_str)
             payload = dict(point.payload)
             payload["Остаток"] = batch_payloads.get(article_str)
