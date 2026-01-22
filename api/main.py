@@ -16,15 +16,25 @@ import asyncio
 import qdrant_client as qc
 import fastembed
 import fastapi
+import importlib.metadata
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-logger.info(f"Starting API...")
-logger.info(f"Qdrant Client version: {qc.__version__}")
-logger.info(f"FastEmbed version: {fastembed.__version__}")
-logger.info(f"FastAPI version: {fastapi.__version__}")
+logger.info("Starting API...")
+try:
+    logger.info(f"Qdrant Client version: {importlib.metadata.version('qdrant-client')}")
+except Exception:
+    logger.info("Qdrant Client version: unknown")
+try:
+    logger.info(f"FastEmbed version: {importlib.metadata.version('fastembed')}")
+except Exception:
+    logger.info("FastEmbed version: unknown")
+try:
+    logger.info(f"FastAPI version: {importlib.metadata.version('fastapi')}")
+except Exception:
+    logger.info("FastAPI version: unknown")
 
 app = FastAPI()
 
