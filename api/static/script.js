@@ -2,9 +2,15 @@ const processButton = document.getElementById('process-file');
 const uploadButton = document.getElementById('upload-data');
 const statusText = document.getElementById('status-text');
 const progressFill = document.getElementById('progress-fill');
+const logOutput = document.getElementById('log-output');
 
 const setStatus = (message) => {
     statusText.textContent = `Статус: ${message}`;
+};
+
+const addLog = (message) => {
+    const timestamp = new Date().toLocaleTimeString();
+    logOutput.textContent = `[${timestamp}] ${message}\n` + logOutput.textContent;
 };
 
 const setProgress = (value) => {
@@ -94,6 +100,7 @@ uploadButton.addEventListener('click', async () => {
     const fileInput = document.getElementById('xlsx-file');
     const skipRows = parseInt(document.getElementById('skip-rows').value, 10);
     const batchSize = parseInt(document.getElementById('batch-size').value, 10);
+    const pointsBatchSize = parseInt(document.getElementById('points-batch-size').value, 10);
     const file = fileInput.files[0];
     const collectionName = document.getElementById('collection-name').value;
 
@@ -118,6 +125,7 @@ uploadButton.addEventListener('click', async () => {
 
     setStatus('отправка данных на сервер...');
     setProgress(80);
+    addLog('Старт загрузки.');
     processButton.disabled = true;
     uploadButton.disabled = true;
 
@@ -127,23 +135,60 @@ uploadButton.addEventListener('click', async () => {
     formData.append('mappings', JSON.stringify(mappings));
     formData.append('collection_name', collectionName);
     formData.append('batch_size', isNaN(batchSize) ? 16 : batchSize);
+    formData.append('points_batch_size', isNaN(pointsBatchSize) ? 200 : pointsBatchSize);
+
+    const pollStatus = async (jobId) => {
+        const response = await fetch(`/upload_status/${jobId}`);
+        if (!response.ok) {
+            throw new Error('Ошибка получения статуса загрузки.');
+        }
+        return response.json();
+    };
 
     try {
-        const response = await fetch('/upload_processed_xlsx', {
+        const response = await fetch('/upload_processed_xlsx_async', {
             method: 'POST',
             body: formData
         });
 
         if (!response.ok) {
-            throw new Error('Произошла ошибка при загрузке данных.');
+            throw new Error('Произошла ошибка при старте загрузки.');
         }
 
-        const data = await response.json();
-        setStatus(`успех! Проиндексировано строк: ${data.indexed_rows}`);
-        setProgress(100);
+        const { job_id: jobId } = await response.json();
+        addLog(`Задача запущена: ${jobId}`);
+
+        let isRunning = true;
+        while (isRunning) {
+            await new Promise((resolve) => setTimeout(resolve, 1500));
+            const status = await pollStatus(jobId);
+
+            if (status.status === 'failed') {
+                throw new Error(status.error || 'Ошибка обработки файла.');
+            }
+
+            const progressValue = status.progress ?? 0;
+            setProgress(progressValue);
+            setStatus(`в процессе... ${progressValue}%`);
+
+            if (status.total_rows) {
+                addLog(
+                    `Прогресс: ${status.indexed_rows}/${status.total_rows} | ` +
+                    `${status.rate || 0} строк/сек | ETA ${status.eta || 0}с`
+                );
+            }
+
+            if (status.status === 'completed') {
+                isRunning = false;
+                setStatus(`успех! Проиндексировано строк: ${status.indexed_rows}`);
+                setProgress(100);
+                addLog(`Готово за ${status.duration_sec || 0} сек.`);
+            }
+        }
     } catch (error) {
         setStatus('ошибка загрузки данных.');
         setProgress(0);
+        addLog(`Ошибка: ${error.message}`);
         alert(error.message);
     } finally {
         processButton.disabled = false;

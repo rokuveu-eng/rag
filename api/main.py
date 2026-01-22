@@ -4,6 +4,7 @@ from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Query
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse
 from qdrant_client import QdrantClient, models
+from qdrant_client.http.exceptions import UnexpectedResponse
 import httpx
 from fastembed import SparseTextEmbedding
 import numpy as np
@@ -19,6 +20,7 @@ import fastembed
 import fastapi
 import importlib.metadata
 from time import perf_counter
+import uuid
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -48,6 +50,7 @@ async def read_root():
         return f.read()
 
 qdrant_client = QdrantClient(host=os.getenv("QDRANT_HOST", "qdrant"), port=int(os.getenv("QDRANT_PORT", "6333")))
+upload_jobs = {}
 
 def default_ollama_base_url():
     if os.path.exists("/.dockerenv"):
@@ -62,6 +65,24 @@ ollama_openai_embeddings_url = f"{ollama_base_url}/v1/embeddings"
 # Initialize FastEmbed Sparse Model
 # Using a standard SPLADE model which acts as a learned BM25 replacement.
 sparse_embedding_model = SparseTextEmbedding(model_name="prithivida/Splade_PP_en_v1")
+
+def safe_upsert(collection_name: str, points: list):
+    try:
+        qdrant_client.upsert(
+            collection_name=collection_name,
+            wait=True,
+            points=points,
+        )
+        return
+    except UnexpectedResponse as exc:
+        message = str(exc)
+        if "Payload error" in message and len(points) > 1:
+            midpoint = len(points) // 2
+            safe_upsert(collection_name, points[:midpoint])
+            safe_upsert(collection_name, points[midpoint:])
+            return
+        raise
+
 
 def create_collection(collection_name: str):
     try:
@@ -161,6 +182,158 @@ def get_sparse_embedding(text: str):
     embeddings = list(sparse_embedding_model.embed([text]))
     return embeddings[0]
 
+async def process_xlsx_upload(
+    *,
+    contents: bytes,
+    file_name: str,
+    skip_rows: int,
+    mappings: dict,
+    collection_name: str,
+    batch_size: int,
+    points_batch_size: int,
+    job_id: str = None,
+):
+    if points_batch_size <= 0:
+        raise HTTPException(status_code=400, detail="points_batch_size must be > 0")
+
+    workbook = openpyxl.load_workbook(io.BytesIO(contents))
+    sheet = workbook.active
+
+    rows = list(sheet.iter_rows(min_row=skip_rows + 2, values_only=True))
+    documents = []
+    for row in rows:
+        # Safely handle None values in row
+        def get_val(idx):
+            if idx < len(row) and row[idx] is not None:
+                return str(row[idx])
+            return ""
+
+        text_to_embed = (
+            f"Артикул - {get_val(mappings['Артикул'])}, "
+            f"Наименование - {get_val(mappings['Наименование'])}, "
+            f"Тариф с НДС, руб - {get_val(mappings['Тариф с НДС, руб'])}, "
+            f"Имя файла - {file_name}"
+        )
+        documents.append(text_to_embed)
+
+    total_start = perf_counter()
+    indexed_rows = 0
+    total_rows = len(documents)
+
+    if job_id:
+        upload_jobs[job_id].update(
+            {
+                "status": "running",
+                "progress": 0,
+                "indexed_rows": 0,
+                "total_rows": total_rows,
+                "rate": 0,
+                "eta": None,
+            }
+        )
+
+    # Batch dense embeddings via Ollama
+    for start in range(0, len(documents), batch_size):
+        batch_docs = documents[start : start + batch_size]
+        batch_rows = rows[start : start + batch_size]
+
+        embed_start = perf_counter()
+        dense_task = asyncio.create_task(get_ollama_embeddings(batch_docs))
+        sparse_vectors = list(sparse_embedding_model.embed(batch_docs))
+        dense_vectors = await dense_task
+        embed_duration = perf_counter() - embed_start
+
+        batch_points = []
+        for offset, dense_vector in enumerate(dense_vectors):
+            i = start + offset
+            sparse_vector = sparse_vectors[offset]
+
+            qdrant_sparse_vector = models.SparseVector(
+                indices=sparse_vector.indices.tolist(),
+                values=sparse_vector.values.tolist(),
+            )
+
+            row_data = batch_rows[offset]
+            payload = {}
+            for header, col_idx in mappings.items():
+                if col_idx < len(row_data):
+                    payload[header] = row_data[col_idx]
+            payload["Остаток"] = ""
+            payload["Имя файла"] = file_name
+
+            batch_points.append(
+                models.PointStruct(
+                    id=i,
+                    vector={
+                        "text-dense": dense_vector,
+                        "text-sparse": qdrant_sparse_vector,
+                    },
+                    payload=payload,
+                )
+            )
+
+        upsert_start = perf_counter()
+        for chunk_start in range(0, len(batch_points), points_batch_size):
+            chunk = batch_points[chunk_start : chunk_start + points_batch_size]
+            safe_upsert(collection_name, chunk)
+            indexed_rows += len(chunk)
+
+            elapsed = perf_counter() - total_start
+            rate = indexed_rows / elapsed if elapsed > 0 else 0
+            remaining = total_rows - indexed_rows
+            eta = remaining / rate if rate > 0 else 0
+            percent = (indexed_rows / total_rows) * 100 if total_rows else 100
+
+            logger.info(
+                "Progress: %s/%s (%.1f%%), %.2f rows/sec, ETA %.1fs",
+                indexed_rows,
+                total_rows,
+                percent,
+                rate,
+                eta,
+            )
+
+            if job_id:
+                upload_jobs[job_id].update(
+                    {
+                        "status": "running",
+                        "progress": round(percent, 2),
+                        "indexed_rows": indexed_rows,
+                        "total_rows": total_rows,
+                        "rate": round(rate, 2),
+                        "eta": round(eta, 1),
+                    }
+                )
+        upsert_duration = perf_counter() - upsert_start
+
+        logger.info(
+            "Batch %s-%s: embeddings %.2fs, upsert %.2fs",
+            start,
+            start + len(batch_docs) - 1,
+            embed_duration,
+            upsert_duration,
+        )
+
+    total_duration = perf_counter() - total_start
+    logger.info("Indexed %s rows in %.2fs", indexed_rows, total_duration)
+    result = {
+        "status": "success",
+        "indexed_rows": indexed_rows,
+        "duration_sec": round(total_duration, 3),
+    }
+    if job_id:
+        upload_jobs[job_id].update(
+            {
+                "status": "completed",
+                "progress": 100,
+                "indexed_rows": indexed_rows,
+                "total_rows": total_rows,
+                "duration_sec": round(total_duration, 3),
+            }
+        )
+    return result
+
+
 @app.post("/upload_processed_xlsx")
 async def upload_processed_xlsx(
     file: UploadFile = File(...),
@@ -182,117 +355,94 @@ async def upload_processed_xlsx(
             raise HTTPException(status_code=400, detail="Mappings cannot be empty")
         logger.info(f"Parsed mappings: {mappings}")
         contents = await file.read()
-        workbook = openpyxl.load_workbook(io.BytesIO(contents))
-        sheet = workbook.active
-
-        rows = list(sheet.iter_rows(min_row=skip_rows + 2, values_only=True))
-        documents = []
-        for row in rows:
-            # Safely handle None values in row
-            def get_val(idx):
-                if idx < len(row) and row[idx] is not None:
-                    return str(row[idx])
-                return ""
-
-            text_to_embed = (
-                f"Артикул - {get_val(mappings['Артикул'])}, "
-                f"Наименование - {get_val(mappings['Наименование'])}, "
-                f"Тариф с НДС, руб - {get_val(mappings['Тариф с НДС, руб'])}, "
-                f"Имя файла - {file.filename}"
-            )
-            documents.append(text_to_embed)
-
-        if points_batch_size <= 0:
-            raise HTTPException(status_code=400, detail="points_batch_size must be > 0")
-
-        total_start = perf_counter()
-        indexed_rows = 0
-        total_rows = len(documents)
-
-        # Batch dense embeddings via Ollama
-        for start in range(0, len(documents), batch_size):
-            batch_docs = documents[start : start + batch_size]
-            batch_rows = rows[start : start + batch_size]
-
-            embed_start = perf_counter()
-            dense_task = asyncio.create_task(get_ollama_embeddings(batch_docs))
-            sparse_vectors = list(sparse_embedding_model.embed(batch_docs))
-            dense_vectors = await dense_task
-            embed_duration = perf_counter() - embed_start
-
-            batch_points = []
-            for offset, dense_vector in enumerate(dense_vectors):
-                i = start + offset
-                sparse_vector = sparse_vectors[offset]
-
-                qdrant_sparse_vector = models.SparseVector(
-                    indices=sparse_vector.indices.tolist(),
-                    values=sparse_vector.values.tolist(),
-                )
-
-                row_data = batch_rows[offset]
-                payload = {}
-                for header, col_idx in mappings.items():
-                    if col_idx < len(row_data):
-                        payload[header] = row_data[col_idx]
-                payload["Остаток"] = ""
-                payload["Имя файла"] = file.filename
-
-                batch_points.append(
-                    models.PointStruct(
-                        id=i,
-                        vector={
-                            "text-dense": dense_vector,
-                            "text-sparse": qdrant_sparse_vector,
-                        },
-                        payload=payload,
-                    )
-                )
-
-            upsert_start = perf_counter()
-            for chunk_start in range(0, len(batch_points), points_batch_size):
-                chunk = batch_points[chunk_start : chunk_start + points_batch_size]
-                qdrant_client.upsert(
-                    collection_name=collection_name,
-                    wait=True,
-                    points=chunk,
-                )
-                indexed_rows += len(chunk)
-
-                elapsed = perf_counter() - total_start
-                rate = indexed_rows / elapsed if elapsed > 0 else 0
-                remaining = total_rows - indexed_rows
-                eta = remaining / rate if rate > 0 else 0
-                percent = (indexed_rows / total_rows) * 100 if total_rows else 100
-
-                logger.info(
-                    "Progress: %s/%s (%.1f%%), %.2f rows/sec, ETA %.1fs",
-                    indexed_rows,
-                    total_rows,
-                    percent,
-                    rate,
-                    eta,
-                )
-            upsert_duration = perf_counter() - upsert_start
-
-            logger.info(
-                "Batch %s-%s: embeddings %.2fs, upsert %.2fs",
-                start,
-                start + len(batch_docs) - 1,
-                embed_duration,
-                upsert_duration,
-            )
-
-        total_duration = perf_counter() - total_start
-        logger.info("Indexed %s rows in %.2fs", indexed_rows, total_duration)
-        return {
-            "status": "success",
-            "indexed_rows": indexed_rows,
-            "duration_sec": round(total_duration, 3),
-        }
+        return await process_xlsx_upload(
+            contents=contents,
+            file_name=file.filename,
+            skip_rows=skip_rows,
+            mappings=mappings,
+            collection_name=collection_name,
+            batch_size=batch_size,
+            points_batch_size=points_batch_size,
+        )
     except Exception as e:
         logger.error(f"Error processing file: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
+
+
+async def run_upload_job(
+    *,
+    job_id: str,
+    contents: bytes,
+    file_name: str,
+    skip_rows: int,
+    mappings: dict,
+    collection_name: str,
+    batch_size: int,
+    points_batch_size: int,
+):
+    try:
+        await process_xlsx_upload(
+            contents=contents,
+            file_name=file_name,
+            skip_rows=skip_rows,
+            mappings=mappings,
+            collection_name=collection_name,
+            batch_size=batch_size,
+            points_batch_size=points_batch_size,
+            job_id=job_id,
+        )
+    except Exception as exc:
+        logger.error("Async upload job failed: %s", exc, exc_info=True)
+        upload_jobs[job_id].update({"status": "failed", "error": str(exc)})
+
+
+@app.post("/upload_processed_xlsx_async")
+async def upload_processed_xlsx_async(
+    file: UploadFile = File(...),
+    skip_rows: int = Form(...),
+    mappings: str = Form(...),
+    collection_name: str = Form(...),
+    batch_size: int = Form(16),
+    points_batch_size: int = Form(200),
+):
+    logger.info(f"Received request to /upload_processed_xlsx_async for collection: {collection_name}")
+    logger.info(
+        f"skip_rows: {skip_rows}, mappings: {mappings}, batch_size: {batch_size}, points_batch_size: {points_batch_size}"
+    )
+    create_collection(collection_name)
+
+    try:
+        mappings = json.loads(mappings)
+        if not mappings:
+            raise HTTPException(status_code=400, detail="Mappings cannot be empty")
+        logger.info(f"Parsed mappings: {mappings}")
+        contents = await file.read()
+    except Exception as e:
+        logger.error(f"Error processing file: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+    job_id = str(uuid.uuid4())
+    upload_jobs[job_id] = {"status": "queued", "progress": 0}
+    asyncio.create_task(
+        run_upload_job(
+            job_id=job_id,
+            contents=contents,
+            file_name=file.filename,
+            skip_rows=skip_rows,
+            mappings=mappings,
+            collection_name=collection_name,
+            batch_size=batch_size,
+            points_batch_size=points_batch_size,
+        )
+    )
+    return {"status": "started", "job_id": job_id}
+
+
+@app.get("/upload_status/{job_id}")
+async def upload_status(job_id: str):
+    if job_id not in upload_jobs:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return upload_jobs[job_id]
 
 @app.get("/search")
 async def search(query: str = Query(...), collection_name: str = Query(...)):

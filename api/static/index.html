@@ -84,6 +84,18 @@
             color: #1e3a8a;
             font-size: 14px;
         }
+        .log-output {
+            margin-top: 12px;
+            padding: 12px 16px;
+            background: #0f172a;
+            color: #e2e8f0;
+            border-radius: 12px;
+            font-size: 12px;
+            min-height: 80px;
+            max-height: 220px;
+            overflow-y: auto;
+            white-space: pre-wrap;
+        }
         .progress-bar {
             width: 100%;
             height: 10px;
@@ -137,6 +149,11 @@
                 <div class="hint">Размер пачки для Ollama embeddings.</div>
             </div>
             <div>
+                <label for="points-batch-size">Points batch size</label>
+                <input type="number" id="points-batch-size" value="200" min="1" max="5000">
+                <div class="hint">Размер чанка для записи в Qdrant.</div>
+            </div>
+            <div>
                 <label for="xlsx-file">XLSX файл</label>
                 <input type="file" id="xlsx-file" accept=".xlsx" />
                 <div class="hint">Поддерживается только .xlsx.</div>
@@ -149,6 +166,7 @@
             <div class="progress-bar">
                 <div class="progress-fill" id="progress-fill"></div>
             </div>
+            <div class="log-output" id="log-output">Логи загрузки появятся здесь.</div>
         </div>
 
         <div class="section">

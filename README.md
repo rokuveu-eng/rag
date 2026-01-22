@@ -92,16 +92,50 @@ curl -X POST \
   -F "mappings={\"Артикул\":0,\"Наименование\":1,\"Тариф с НДС, руб\":2}" \
   -F "collection_name=my_collection" \
   -F "batch_size=16" \
+  -F "points_batch_size=200" \
   http://localhost:8424/upload_processed_xlsx
+```
+
+### Асинхронная загрузка (с прогрессом)
+```bash
+curl -X POST \
+  -F "file=@/path/to/data.xlsx" \
+  -F "skip_rows=0" \
+  -F "mappings={\"Артикул\":0,\"Наименование\":1,\"Тариф с НДС, руб\":2}" \
+  -F "collection_name=my_collection" \
+  -F "batch_size=16" \
+  -F "points_batch_size=200" \
+  http://localhost:8424/upload_processed_xlsx_async
+```
+Ответ:
+```
+{"status":"started","job_id":"..."}
+```
+Статус:
+```
+GET http://localhost:8424/upload_status/{job_id}
+```
+
+Пример ответа статуса:
+```json
+{
+  "status": "running",
+  "progress": 37.5,
+  "indexed_rows": 1500,
+  "total_rows": 4000,
+  "rate": 120.5,
+  "eta": 20.3
+}
 ```
 
 ### Пояснение:
 - `skip_rows` — сколько строк пропустить перед заголовком.
 - `mappings` — соответствие колонок (индексы идут с 0).
 - `batch_size` — размер пачки для батч‑генерации dense эмбеддингов через Ollama.
+- `points_batch_size` — размер чанка при записи в Qdrant (уменьшайте при ошибке лимита payload). Интерфейс использует асинхронную загрузку и показывает прогресс в форме.
 
 > Батчинг ускоряет индексирование. Сначала используется `/api/embed` (если поддерживается Ollama),
-> иначе выполняются параллельные запросы к `/api/embeddings`.
+> иначе выполняются параллельные запросы к `/api/embeddings`. Запись в Qdrant идёт чанками.
 
 ---
 
