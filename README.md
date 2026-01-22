@@ -70,8 +70,8 @@ docker compose up -d --build
 - Qdrant: http://localhost:6333
 - API: http://localhost:8424
 
-> Внутри docker‑сети API обращается к сервису `ollama` по адресу `http://ollama:11434`.
-> Если запускаете API **вне Docker**, укажите `OLLAMA_BASE_URL=http://localhost:11434`.
+> По умолчанию API обращается к Ollama по адресу `http://localhost:11434`.
+> Если запускаете API внутри Docker и Ollama в контейнере, укажите `OLLAMA_BASE_URL=http://ollama:11434`.
 
 ---
 

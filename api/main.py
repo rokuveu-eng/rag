@@ -47,7 +47,7 @@ async def read_root():
         return f.read()
 
 qdrant_client = QdrantClient(host=os.getenv("QDRANT_HOST", "qdrant"), port=int(os.getenv("QDRANT_PORT", "6333")))
-ollama_base_url = os.getenv("OLLAMA_BASE_URL", "http://ollama:11434")
+ollama_base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 ollama_api_url = f"{ollama_base_url}/api/embeddings"
 ollama_batch_api_url = f"{ollama_base_url}/api/embed"
 
