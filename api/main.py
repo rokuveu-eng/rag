@@ -47,6 +47,7 @@ async def read_root():
 
 qdrant_client = QdrantClient(host="qdrant", port=6333)
 ollama_api_url = "http://ollama:11434/api/embeddings"
+ollama_batch_api_url = "http://ollama:11434/api/embed"
 
 # Initialize FastEmbed Sparse Model
 # Using a standard SPLADE model which acts as a learned BM25 replacement.
@@ -70,16 +71,34 @@ def create_collection(collection_name: str):
             },
         )
 
-async def get_ollama_embeddings(texts):
+async def get_ollama_embeddings(texts, concurrency=4):
     async with httpx.AsyncClient(timeout=300.0) as client:
-        response = await client.post(ollama_api_url, json={"model": "bge-m3", "prompt": texts})
-        response.raise_for_status()
-        data = response.json()
-        # Ollama returns either {"embedding": [...]} for single prompt
-        # or {"embeddings": [[...], ...]} for list of prompts
-        if "embeddings" in data:
-            return data["embeddings"]
-        return [data["embedding"]]
+        # Try batch endpoint first (if supported by Ollama)
+        try:
+            batch_response = await client.post(
+                ollama_batch_api_url,
+                json={"model": "bge-m3", "input": texts},
+            )
+            if batch_response.status_code < 400:
+                data = batch_response.json()
+                if "embeddings" in data:
+                    return data["embeddings"]
+        except httpx.HTTPError:
+            pass
+
+        # Fallback: parallel single requests to /api/embeddings
+        semaphore = asyncio.Semaphore(concurrency)
+
+        async def fetch_one(text):
+            async with semaphore:
+                response = await client.post(
+                    ollama_api_url,
+                    json={"model": "bge-m3", "prompt": text},
+                )
+                response.raise_for_status()
+                return response.json()["embedding"]
+
+        return await asyncio.gather(*(fetch_one(text) for text in texts))
 
 async def get_ollama_embedding(text: str):
     embeddings = await get_ollama_embeddings([text])
