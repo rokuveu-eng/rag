@@ -692,24 +692,12 @@ async def search(
     # Sparse vector from FastEmbed (No more re-indexing!)
     sparse_vector_gen = list(sparse_embedding_model.embed([query]))[0]
     sparse_vector = models.SparseVector(
-        indices=sparse_vector_gen.indices.tolist(), 
-        values=sparse_vector_gen.values.tolist()
+        indices=sparse_vector_gen.indices.tolist(),
+        values=sparse_vector_gen.values.tolist(),
     )
-    
-    # Hybrid search using Query API (Prefetch + Fusion RRF) - Requires qdrant-client >= 1.10.0
-    try:
-        query_filter = None
-        if only_in_stock:
-            query_filter = models.Filter(
-                must=[
-                    models.FieldCondition(
-                        key="Остаток",
-                        range=models.Range(gt=0),
-                    )
-                ]
-            )
 
-        search_result = qdrant_client.query_points(
+    def query_points(limit: int, query_filter: models.Filter | None):
+        return qdrant_client.query_points(
             collection_name=collection_name,
             prefetch=[
                 models.Prefetch(
@@ -724,11 +712,40 @@ async def search(
                 ),
             ],
             query=models.FusionQuery(fusion=models.Fusion.RRF),
-            limit=10,
+            limit=limit,
             with_payload=True,
             query_filter=query_filter,
+        ).points
+
+    # Hybrid search using Query API (Prefetch + Fusion RRF) - Requires qdrant-client >= 1.10.0
+    try:
+        in_stock_filter = models.Filter(
+            must=[
+                models.FieldCondition(
+                    key="Остаток",
+                    range=models.Range(gt=0),
+                )
+            ]
         )
-        return {"results": search_result.points}
+
+        if only_in_stock:
+            points = query_points(15, in_stock_filter)
+            return {"results": points}
+
+        in_stock_points = query_points(5, in_stock_filter)
+        general_points = query_points(15, None)
+
+        seen_ids = {point.id for point in in_stock_points}
+        combined = list(in_stock_points)
+        for point in general_points:
+            if point.id in seen_ids:
+                continue
+            combined.append(point)
+            seen_ids.add(point.id)
+            if len(combined) >= 15:
+                break
+
+        return {"results": combined}
     except Exception as e:
         logger.error(f"Search failed: {e}", exc_info=True)
         # Return error details to the client for easier debugging
