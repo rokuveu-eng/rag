@@ -70,11 +70,20 @@ def create_collection(collection_name: str):
             },
         )
 
-async def get_ollama_embedding(text: str):
+async def get_ollama_embeddings(texts):
     async with httpx.AsyncClient(timeout=300.0) as client:
-        response = await client.post(ollama_api_url, json={"model": "bge-m3", "prompt": text})
+        response = await client.post(ollama_api_url, json={"model": "bge-m3", "prompt": texts})
         response.raise_for_status()
-        return response.json()["embedding"]
+        data = response.json()
+        # Ollama returns either {"embedding": [...]} for single prompt
+        # or {"embeddings": [[...], ...]} for list of prompts
+        if "embeddings" in data:
+            return data["embeddings"]
+        return [data["embedding"]]
+
+async def get_ollama_embedding(text: str):
+    embeddings = await get_ollama_embeddings([text])
+    return embeddings[0]
 
 def get_sparse_embedding(text: str):
     # FastEmbed returns a generator of sparse embeddings
@@ -82,11 +91,17 @@ def get_sparse_embedding(text: str):
     return embeddings[0]
 
 @app.post("/upload_processed_xlsx")
-async def upload_processed_xlsx(file: UploadFile = File(...), skip_rows: int = Form(...), mappings: str = Form(...), collection_name: str = Form(...)):
+async def upload_processed_xlsx(
+    file: UploadFile = File(...),
+    skip_rows: int = Form(...),
+    mappings: str = Form(...),
+    collection_name: str = Form(...),
+    batch_size: int = Form(16),
+):
     logger.info(f"Received request to /upload_processed_xlsx for collection: {collection_name}")
-    logger.info(f"skip_rows: {skip_rows}, mappings: {mappings}")
+    logger.info(f"skip_rows: {skip_rows}, mappings: {mappings}, batch_size: {batch_size}")
     create_collection(collection_name)
-    
+
     try:
         mappings = json.loads(mappings)
         if not mappings:
@@ -104,51 +119,53 @@ async def upload_processed_xlsx(file: UploadFile = File(...), skip_rows: int = F
                 if idx < len(row) and row[idx] is not None:
                     return str(row[idx])
                 return ""
-                
-            text_to_embed = f"Артикул - {get_val(mappings['Артикул'])}, Наименование - {get_val(mappings['Наименование'])}, Тариф с НДС, руб - {get_val(mappings['Тариф с НДС, руб'])}, Имя файла - {file.filename}"
-            documents.append(text_to_embed)
-        
-        points = []
-        
-        # We can process dense and sparse embeddings
-        # For better performance, we could batch this, but strictly following the request logic:
-        
-        # Batch generation for sparse embeddings
-        sparse_vectors = list(sparse_embedding_model.embed(documents))
-        
-        for i, doc in enumerate(documents):
-            # Dense vector from Ollama (still one by one as it is async http)
-            dense_vector = await get_ollama_embedding(doc)
-            
-            # Sparse vector from FastEmbed
-            sparse_vector = sparse_vectors[i]
-            
-            # Convert FastEmbed sparse format to Qdrant models.SparseVector
-            # FastEmbed returns SparseEmbedding object with .indices and .values (numpy arrays)
-            qdrant_sparse_vector = models.SparseVector(
-                indices=sparse_vector.indices.tolist(), 
-                values=sparse_vector.values.tolist()
-            )
-            
-            # Payload
-            row_data = rows[i]
-            payload = {}
-            for header, col_idx in mappings.items():
-                if col_idx < len(row_data):
-                    payload[header] = row_data[col_idx]
-            payload["Остаток"] = ""
-            payload["Имя файла"] = file.filename
-            
-            points.append(models.PointStruct(
-                id=i,
-                vector={
-                    "text-dense": dense_vector,
-                    "text-sparse": qdrant_sparse_vector
-                },
-                payload=payload
-            ))
 
-        # Upsert in batches if too large, but for now single batch as per original logic
+            text_to_embed = (
+                f"Артикул - {get_val(mappings['Артикул'])}, "
+                f"Наименование - {get_val(mappings['Наименование'])}, "
+                f"Тариф с НДС, руб - {get_val(mappings['Тариф с НДС, руб'])}, "
+                f"Имя файла - {file.filename}"
+            )
+            documents.append(text_to_embed)
+
+        points = []
+
+        # Batch generation for sparse embeddings (FastEmbed is already efficient)
+        sparse_vectors = list(sparse_embedding_model.embed(documents))
+
+        # Batch dense embeddings via Ollama
+        for start in range(0, len(documents), batch_size):
+            batch_docs = documents[start : start + batch_size]
+            dense_vectors = await get_ollama_embeddings(batch_docs)
+
+            for offset, dense_vector in enumerate(dense_vectors):
+                i = start + offset
+                sparse_vector = sparse_vectors[i]
+
+                qdrant_sparse_vector = models.SparseVector(
+                    indices=sparse_vector.indices.tolist(),
+                    values=sparse_vector.values.tolist(),
+                )
+
+                row_data = rows[i]
+                payload = {}
+                for header, col_idx in mappings.items():
+                    if col_idx < len(row_data):
+                        payload[header] = row_data[col_idx]
+                payload["Остаток"] = ""
+                payload["Имя файла"] = file.filename
+
+                points.append(
+                    models.PointStruct(
+                        id=i,
+                        vector={
+                            "text-dense": dense_vector,
+                            "text-sparse": qdrant_sparse_vector,
+                        },
+                        payload=payload,
+                    )
+                )
+
         qdrant_client.upsert(
             collection_name=collection_name,
             wait=True,

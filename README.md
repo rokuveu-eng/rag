@@ -53,6 +53,10 @@
 
 - Docker / Docker Compose
 - Qdrant Client **>= 1.10.0**
+- NVIDIA GPU (опционально, только для ускорения Ollama)
+- Установленный **nvidia-container-toolkit** на хосте (если используете GPU)
+
+> Qdrant работает на CPU и **не требует** GPU. Он полностью совместим с GPU‑сервисами рядом.
 
 ---
 
@@ -82,12 +86,16 @@ curl -X POST \
   -F "skip_rows=0" \
   -F "mappings={\"Артикул\":0,\"Наименование\":1,\"Тариф с НДС, руб\":2}" \
   -F "collection_name=my_collection" \
+  -F "batch_size=16" \
   http://localhost:8424/upload_processed_xlsx
 ```
 
 ### Пояснение:
 - `skip_rows` — сколько строк пропустить перед заголовком.
 - `mappings` — соответствие колонок (индексы идут с 0).
+- `batch_size` — размер пачки для батч‑генерации dense эмбеддингов через Ollama.
+
+> Батчинг ускоряет индексирование, т.к. вместо одного запроса на строку выполняется один запрос на пачку.
 
 ---
 
@@ -109,6 +117,8 @@ curl -G "http://localhost:8424/search" \
 1. Генерируется dense-вектор через Ollama (`bge-m3`)
 2. Генерируется sparse-вектор через FastEmbed (SPLADE)
 3. Qdrant объединяет результаты через **Fusion RRF** (`query_points + prefetch`)
+
+> Ollama запущена с GPU (если он доступен), что ускоряет генерацию dense‑векторов.
 
 ---
 
