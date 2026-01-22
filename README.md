@@ -72,6 +72,7 @@ docker compose up -d --build
 
 > По умолчанию API обращается к Ollama по адресу `http://localhost:11434`.
 > Если запускаете API внутри Docker и Ollama в контейнере, укажите `OLLAMA_BASE_URL=http://ollama:11434`.
+> В контейнере `localhost` указывает на сам API, поэтому для Docker нужен hostname `ollama`.
 
 ---
 

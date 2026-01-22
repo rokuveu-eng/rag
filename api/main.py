@@ -47,7 +47,13 @@ async def read_root():
         return f.read()
 
 qdrant_client = QdrantClient(host=os.getenv("QDRANT_HOST", "qdrant"), port=int(os.getenv("QDRANT_PORT", "6333")))
-ollama_base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+
+def default_ollama_base_url():
+    if os.path.exists("/.dockerenv"):
+        return "http://ollama:11434"
+    return "http://localhost:11434"
+
+ollama_base_url = os.getenv("OLLAMA_BASE_URL", default_ollama_base_url())
 ollama_api_url = f"{ollama_base_url}/api/embeddings"
 ollama_batch_api_url = f"{ollama_base_url}/api/embed"
 
@@ -100,7 +106,13 @@ async def get_ollama_embeddings(texts, concurrency=4):
                 response.raise_for_status()
                 return response.json()["embedding"]
 
-        return await asyncio.gather(*(fetch_one(text) for text in texts))
+        try:
+            return await asyncio.gather(*(fetch_one(text) for text in texts))
+        except httpx.ConnectError as exc:
+            logger.error(
+                "Cannot connect to Ollama. Set OLLAMA_BASE_URL (e.g. http://ollama:11434 for Docker or http://localhost:11434 for local)."
+            )
+            raise exc
 
 async def get_ollama_embedding(text: str):
     embeddings = await get_ollama_embeddings([text])
