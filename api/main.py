@@ -530,7 +530,6 @@ async def process_stock_upload(
             with_vectors=False,
         )[0]
 
-        update_points = []
         found_articles = set()
         for point in matched_points:
             article_value = point.payload.get("Артикул")
@@ -538,16 +537,17 @@ async def process_stock_upload(
                 continue
             article_str = normalize_article(article_value)
             found_articles.add(article_str)
-            payload = dict(point.payload)
-            payload["Остаток"] = batch_payloads.get(article_str)
-            update_points.append(models.PointStruct(id=point.id, payload=payload, vector={}))
+            if article_str not in batch_payloads:
+                continue
+            qdrant_client.set_payload(
+                collection_name=collection_name,
+                payload={"Остаток": batch_payloads.get(article_str)},
+                points=[point.id],
+            )
+            updated += 1
 
         missing_articles = set(batch_articles) - found_articles
         skipped += len(missing_articles)
-
-        if update_points:
-            safe_upsert(collection_name, update_points)
-            updated += len(update_points)
 
         processed += len(batch_rows)
         elapsed = perf_counter() - total_start
