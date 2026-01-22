@@ -13,6 +13,7 @@ import io
 import logging
 import re
 import asyncio
+import os
 import qdrant_client as qc
 import fastembed
 import fastapi
@@ -45,9 +46,10 @@ async def read_root():
     with open("static/index.html") as f:
         return f.read()
 
-qdrant_client = QdrantClient(host="qdrant", port=6333)
-ollama_api_url = "http://ollama:11434/api/embeddings"
-ollama_batch_api_url = "http://ollama:11434/api/embed"
+qdrant_client = QdrantClient(host=os.getenv("QDRANT_HOST", "qdrant"), port=int(os.getenv("QDRANT_PORT", "6333")))
+ollama_base_url = os.getenv("OLLAMA_BASE_URL", "http://ollama:11434")
+ollama_api_url = f"{ollama_base_url}/api/embeddings"
+ollama_batch_api_url = f"{ollama_base_url}/api/embed"
 
 # Initialize FastEmbed Sparse Model
 # Using a standard SPLADE model which acts as a learned BM25 replacement.
