@@ -20,6 +20,7 @@ import fastembed
 import fastapi
 import importlib.metadata
 from time import perf_counter
+from typing import Optional
 import uuid
 
 # Configure logging
@@ -696,7 +697,7 @@ async def search(
         values=sparse_vector_gen.values.tolist(),
     )
 
-    def query_points(limit: int, query_filter: models.Filter | None):
+    def query_points(limit: int, query_filter: Optional[models.Filter]):
         return qdrant_client.query_points(
             collection_name=collection_name,
             prefetch=[
