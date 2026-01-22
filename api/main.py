@@ -459,6 +459,14 @@ def normalize_article(value) -> str:
     return text.strip()
 
 
+def reset_stock_payload(collection_name: str):
+    qdrant_client.set_payload(
+        collection_name=collection_name,
+        payload={"Остаток": 0},
+        filter=models.Filter(must=[]),
+    )
+
+
 async def process_stock_upload(
     *,
     contents: bytes,
@@ -614,6 +622,8 @@ async def run_stock_job(
     batch_size: int,
 ):
     try:
+        stock_jobs[job_id].update({"status": "resetting", "progress": 0})
+        reset_stock_payload(collection_name)
         await process_stock_upload(
             contents=contents,
             skip_rows=skip_rows,
@@ -671,7 +681,11 @@ async def stock_status(job_id: str):
     return stock_jobs[job_id]
 
 @app.get("/search")
-async def search(query: str = Query(...), collection_name: str = Query(...)):
+async def search(
+    query: str = Query(...),
+    collection_name: str = Query(...),
+    only_in_stock: bool = Query(False),
+):
     # Dense vector for semantic search from Ollama
     dense_vector = await get_ollama_embedding(query)
 
@@ -684,6 +698,17 @@ async def search(query: str = Query(...), collection_name: str = Query(...)):
     
     # Hybrid search using Query API (Prefetch + Fusion RRF) - Requires qdrant-client >= 1.10.0
     try:
+        query_filter = None
+        if only_in_stock:
+            query_filter = models.Filter(
+                must=[
+                    models.FieldCondition(
+                        key="Остаток",
+                        range=models.Range(gt=0),
+                    )
+                ]
+            )
+
         search_result = qdrant_client.query_points(
             collection_name=collection_name,
             prefetch=[
@@ -701,6 +726,7 @@ async def search(query: str = Query(...), collection_name: str = Query(...)):
             query=models.FusionQuery(fusion=models.Fusion.RRF),
             limit=10,
             with_payload=True,
+            query_filter=query_filter,
         )
         return {"results": search_result.points}
     except Exception as e:

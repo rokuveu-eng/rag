@@ -400,6 +400,12 @@ stockUploadButton.addEventListener('click', async () => {
                 setStockProgress(100);
                 addStockLog(`Готово за ${status.duration_sec || 0} сек.`);
             }
+
+            if (status.status === 'resetting') {
+                setStockStatus('обнуление остатков...');
+                setStockProgress(5);
+                addStockLog('Обнуление остатков по всей коллекции.');
+            }
         }
     } catch (error) {
         setStockStatus('ошибка обновления.');
