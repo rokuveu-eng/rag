@@ -91,7 +91,14 @@ async def get_ollama_embeddings(texts, concurrency=4):
             if batch_response.status_code < 400:
                 data = batch_response.json()
                 if "embeddings" in data:
-                    return data["embeddings"]
+                    embeddings = data["embeddings"]
+                    if len(embeddings) == len(texts):
+                        return embeddings
+                    logger.warning(
+                        "Ollama /api/embed returned %s embeddings for %s inputs. Falling back.",
+                        len(embeddings),
+                        len(texts),
+                    )
         except httpx.HTTPError:
             pass
 
@@ -104,7 +111,15 @@ async def get_ollama_embeddings(texts, concurrency=4):
             if openai_response.status_code < 400:
                 data = openai_response.json()
                 if "data" in data:
-                    return [item["embedding"] for item in data["data"]]
+                    ordered = sorted(data["data"], key=lambda item: item.get("index", 0))
+                    embeddings = [item["embedding"] for item in ordered]
+                    if len(embeddings) == len(texts):
+                        return embeddings
+                    logger.warning(
+                        "Ollama /v1/embeddings returned %s embeddings for %s inputs. Falling back.",
+                        len(embeddings),
+                        len(texts),
+                    )
         except httpx.HTTPError:
             pass
 
