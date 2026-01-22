@@ -463,7 +463,7 @@ def reset_stock_payload(collection_name: str):
     qdrant_client.set_payload(
         collection_name=collection_name,
         payload={"Остаток": 0},
-        filter=models.Filter(must=[]),
+        points=models.Filter(must=[]),
     )
 
 
