@@ -56,6 +56,7 @@ def default_ollama_base_url():
 ollama_base_url = os.getenv("OLLAMA_BASE_URL", default_ollama_base_url())
 ollama_api_url = f"{ollama_base_url}/api/embeddings"
 ollama_batch_api_url = f"{ollama_base_url}/api/embed"
+ollama_openai_embeddings_url = f"{ollama_base_url}/v1/embeddings"
 
 # Initialize FastEmbed Sparse Model
 # Using a standard SPLADE model which acts as a learned BM25 replacement.
@@ -94,6 +95,19 @@ async def get_ollama_embeddings(texts, concurrency=4):
         except httpx.HTTPError:
             pass
 
+        # Fallback: OpenAI-compatible embeddings endpoint (batch)
+        try:
+            openai_response = await client.post(
+                ollama_openai_embeddings_url,
+                json={"model": "bge-m3", "input": texts},
+            )
+            if openai_response.status_code < 400:
+                data = openai_response.json()
+                if "data" in data:
+                    return [item["embedding"] for item in data["data"]]
+        except httpx.HTTPError:
+            pass
+
         # Fallback: parallel single requests to /api/embeddings
         semaphore = asyncio.Semaphore(concurrency)
 
@@ -103,6 +117,14 @@ async def get_ollama_embeddings(texts, concurrency=4):
                     ollama_api_url,
                     json={"model": "bge-m3", "prompt": text},
                 )
+                if response.status_code == 404:
+                    alt_response = await client.post(
+                        ollama_openai_embeddings_url,
+                        json={"model": "bge-m3", "input": text},
+                    )
+                    alt_response.raise_for_status()
+                    data = alt_response.json()
+                    return data["data"][0]["embedding"]
                 response.raise_for_status()
                 return response.json()["embedding"]
 
