@@ -210,6 +210,9 @@ async def process_xlsx_upload(
 
     rows = list(sheet.iter_rows(min_row=skip_rows + 2, values_only=True))
     documents = []
+    filtered_rows = []
+    skipped_rows = 0
+
     for row in rows:
         # Safely handle None values in row
         def get_val(idx):
@@ -217,13 +220,27 @@ async def process_xlsx_upload(
                 return str(row[idx])
             return ""
 
+        article_raw = get_val(mappings["Артикул"])
+        name_raw = get_val(mappings["Наименование"])
+        article_norm = normalize_article(article_raw)
+        name_norm = str(name_raw).strip()
+
+        if not article_norm and not name_norm:
+            skipped_rows += 1
+            continue
+
         text_to_embed = (
-            f"Артикул - {get_val(mappings['Артикул'])}, "
-            f"Наименование - {get_val(mappings['Наименование'])}, "
+            f"Артикул - {article_raw}, "
+            f"Наименование - {name_raw}, "
             f"Тариф с НДС, руб - {get_val(mappings['Тариф с НДС, руб'])}, "
             f"Имя файла - {file_name}"
         )
         documents.append(text_to_embed)
+        filtered_rows.append(row)
+
+    rows = filtered_rows
+    if skipped_rows:
+        logger.info("Skipped %s rows without article and name", skipped_rows)
 
     total_start = perf_counter()
     indexed_rows = 0
