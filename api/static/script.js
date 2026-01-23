@@ -141,6 +141,7 @@ uploadButton.addEventListener('click', async () => {
     const pointsBatchSize = parseInt(document.getElementById('points-batch-size').value, 10);
     const file = fileInput.files[0];
     const collectionName = document.getElementById('collection-name').value;
+    const articleMode = document.getElementById('article-mode').value;
 
     if (!file) {
         alert('Пожалуйста, выберите файл.');
@@ -172,6 +173,7 @@ uploadButton.addEventListener('click', async () => {
     formData.append('skip_rows', skipRows);
     formData.append('mappings', JSON.stringify(mappings));
     formData.append('collection_name', collectionName);
+    formData.append('article_mode', articleMode);
     formData.append('batch_size', isNaN(batchSize) ? 16 : batchSize);
     formData.append('points_batch_size', isNaN(pointsBatchSize) ? 200 : pointsBatchSize);
 

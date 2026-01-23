@@ -185,6 +185,15 @@
                     <div class="hint">Размер чанка для записи в Qdrant.</div>
                 </div>
                 <div>
+                    <label for="article-mode">Тип прайса</label>
+                    <select id="article-mode">
+                        <option value="price" selected>Прайс-лист (без изменений)</option>
+                        <option value="chint">CHINT (суффикс CHINT)</option>
+                        <option value="dkc">DKC (префикс DKC)</option>
+                    </select>
+                    <div class="hint">Приставка добавляется только в payload артикулов.</div>
+                </div>
+                <div>
                     <label for="xlsx-file">XLSX файл</label>
                     <input type="file" id="xlsx-file" accept=".xlsx" />
                     <div class="hint">Поддерживается только .xlsx.</div>

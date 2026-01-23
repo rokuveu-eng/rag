@@ -193,6 +193,7 @@ async def process_xlsx_upload(
     collection_name: str,
     batch_size: int,
     points_batch_size: int,
+    article_mode: str = "price",
     job_id: str = None,
 ):
     if points_batch_size <= 0:
@@ -260,6 +261,7 @@ async def process_xlsx_upload(
             for header, col_idx in mappings.items():
                 if col_idx < len(row_data):
                     payload[header] = row_data[col_idx]
+            payload["Артикул"] = apply_article_mode(payload.get("Артикул"), article_mode)
             payload["Остаток"] = 0
             payload["Имя файла"] = file_name
 
@@ -342,6 +344,7 @@ async def upload_processed_xlsx(
     skip_rows: int = Form(...),
     mappings: str = Form(...),
     collection_name: str = Form(...),
+    article_mode: str = Form("price"),
     batch_size: int = Form(16),
     points_batch_size: int = Form(200),
 ):
@@ -365,6 +368,7 @@ async def upload_processed_xlsx(
             collection_name=collection_name,
             batch_size=batch_size,
             points_batch_size=points_batch_size,
+            article_mode=article_mode,
         )
     except Exception as e:
         logger.error(f"Error processing file: {e}", exc_info=True)
@@ -381,6 +385,7 @@ async def run_upload_job(
     collection_name: str,
     batch_size: int,
     points_batch_size: int,
+    article_mode: str,
 ):
     try:
         await process_xlsx_upload(
@@ -391,6 +396,7 @@ async def run_upload_job(
             collection_name=collection_name,
             batch_size=batch_size,
             points_batch_size=points_batch_size,
+            article_mode=article_mode,
             job_id=job_id,
         )
     except Exception as exc:
@@ -404,6 +410,7 @@ async def upload_processed_xlsx_async(
     skip_rows: int = Form(...),
     mappings: str = Form(...),
     collection_name: str = Form(...),
+    article_mode: str = Form("price"),
     batch_size: int = Form(16),
     points_batch_size: int = Form(200),
 ):
@@ -435,6 +442,7 @@ async def upload_processed_xlsx_async(
             collection_name=collection_name,
             batch_size=batch_size,
             points_batch_size=points_batch_size,
+            article_mode=article_mode,
         )
     )
     return {"status": "started", "job_id": job_id}
@@ -458,6 +466,17 @@ def normalize_article(value) -> str:
     if text.startswith('"') and text.endswith('"'):
         text = text[1:-1]
     return text.strip()
+
+
+def apply_article_mode(article_value, article_mode: str) -> str:
+    normalized = normalize_article(article_value)
+    if not normalized:
+        return normalized
+    if article_mode == "chint":
+        return f"{normalized}CHINT"
+    if article_mode == "dkc":
+        return f"DKC{normalized}"
+    return normalized
 
 
 def reset_stock_payload(collection_name: str):
