@@ -261,13 +261,15 @@ async def process_xlsx_upload(
             for header, col_idx in mappings.items():
                 if col_idx < len(row_data):
                     payload[header] = row_data[col_idx]
-            payload["Артикул"] = apply_article_mode(payload.get("Артикул"), article_mode)
+            article_value = apply_article_mode(payload.get("Артикул"), article_mode)
+            payload["Артикул"] = article_value
             payload["Остаток"] = 0
             payload["Имя файла"] = file_name
+            point_id = build_point_id(collection_name, article_value)
 
             batch_points.append(
                 models.PointStruct(
-                    id=i,
+                    id=point_id,
                     vector={
                         "text-dense": dense_vector,
                         "text-sparse": qdrant_sparse_vector,
@@ -477,6 +479,12 @@ def apply_article_mode(article_value, article_mode: str) -> str:
     if article_mode == "dkc":
         return f"DKC{normalized}"
     return normalized
+
+
+def build_point_id(collection_name: str, article_value: str) -> str:
+    if not article_value:
+        return str(uuid.uuid4())
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, f"{collection_name}:{article_value}"))
 
 
 def reset_stock_payload(collection_name: str):
