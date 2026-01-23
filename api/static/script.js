@@ -3,6 +3,10 @@ const uploadButton = document.getElementById('upload-data');
 const statusText = document.getElementById('status-text');
 const progressFill = document.getElementById('progress-fill');
 const logOutput = document.getElementById('log-output');
+const sheetSelect = document.getElementById('sheet-name');
+let cachedWorkbook = null;
+let cachedFileBuffer = null;
+const mainRequiredColumns = ['Артикул', 'Наименование', 'Тариф с НДС, руб'];
 
 const stockProcessButton = document.getElementById('stock-process-file');
 const stockUploadButton = document.getElementById('stock-upload-data');
@@ -56,6 +60,57 @@ if (tabButtons.length) {
     });
 }
 
+const renderMainMappings = (headers) => {
+    const columnMappingsDiv = document.getElementById('column-mappings');
+    columnMappingsDiv.innerHTML = '';
+
+    mainRequiredColumns.forEach(requiredCol => {
+        const row = document.createElement('div');
+        row.className = 'mapping-row';
+
+        const label = document.createElement('label');
+        label.textContent = requiredCol;
+
+        const select = document.createElement('select');
+        select.id = `select-${requiredCol}`;
+
+        const defaultOption = document.createElement('option');
+        defaultOption.value = '';
+        defaultOption.textContent = `Выберите столбец для "${requiredCol}"`;
+        select.appendChild(defaultOption);
+
+        headers.forEach((header, index) => {
+            const option = document.createElement('option');
+            option.value = index;
+            option.textContent = header;
+            select.appendChild(option);
+        });
+
+        row.appendChild(label);
+        row.appendChild(select);
+        columnMappingsDiv.appendChild(row);
+    });
+};
+
+const updateMainSheetMappings = () => {
+    if (!cachedWorkbook) {
+        return;
+    }
+    const skipRows = parseInt(document.getElementById('skip-rows').value, 10) || 0;
+    const selectedSheet = sheetSelect.value || cachedWorkbook.SheetNames[0];
+    const worksheet = cachedWorkbook.Sheets[selectedSheet];
+    if (!worksheet) {
+        return;
+    }
+    const json = XLSX.utils.sheet_to_json(worksheet, { header: 1 });
+    const headers = json[skipRows] || [];
+    renderMainMappings(headers);
+};
+
+sheetSelect.addEventListener('change', () => {
+    updateMainSheetMappings();
+});
+
 processButton.addEventListener('click', () => {
     const fileInput = document.getElementById('xlsx-file');
     const skipRows = parseInt(document.getElementById('skip-rows').value, 10);
@@ -84,42 +139,31 @@ processButton.addEventListener('click', () => {
 
         const data = new Uint8Array(e.target.result);
         const workbook = XLSX.read(data, {type: 'array'});
-        const firstSheetName = workbook.SheetNames[0];
-        const worksheet = workbook.Sheets[firstSheetName];
-        const json = XLSX.utils.sheet_to_json(worksheet, { header: 1 });
+        cachedWorkbook = workbook;
+        cachedFileBuffer = data;
+        const sheetNames = workbook.SheetNames || [];
 
-        const headers = json[skipRows];
-        const columnMappingsDiv = document.getElementById('column-mappings');
-        columnMappingsDiv.innerHTML = '';
+        sheetSelect.innerHTML = '';
+        if (!sheetNames.length) {
+            sheetSelect.disabled = true;
+            sheetSelect.innerHTML = '<option value="">Листы не найдены</option>';
+            setStatus('листов не найдено');
+            setProgress(0);
+            return;
+        }
 
-        const requiredColumns = ['Артикул', 'Наименование', 'Тариф с НДС, руб'];
-
-        requiredColumns.forEach(requiredCol => {
-            const row = document.createElement('div');
-            row.className = 'mapping-row';
-
-            const label = document.createElement('label');
-            label.textContent = requiredCol;
-
-            const select = document.createElement('select');
-            select.id = `select-${requiredCol}`;
-
-            const defaultOption = document.createElement('option');
-            defaultOption.value = '';
-            defaultOption.textContent = `Выберите столбец для "${requiredCol}"`;
-            select.appendChild(defaultOption);
-
-            headers.forEach((header, index) => {
-                const option = document.createElement('option');
-                option.value = index;
-                option.textContent = header;
-                select.appendChild(option);
-            });
-
-            row.appendChild(label);
-            row.appendChild(select);
-            columnMappingsDiv.appendChild(row);
+        sheetNames.forEach((name, index) => {
+            const option = document.createElement('option');
+            option.value = name;
+            option.textContent = name;
+            if (index === 0) {
+                option.selected = true;
+            }
+            sheetSelect.appendChild(option);
         });
+        sheetSelect.disabled = false;
+
+        updateMainSheetMappings();
 
         uploadButton.style.display = 'inline-flex';
         setStatus('готово к загрузке. Настройте маппинг.');
@@ -142,6 +186,7 @@ uploadButton.addEventListener('click', async () => {
     const file = fileInput.files[0];
     const collectionName = document.getElementById('collection-name').value;
     const articleMode = document.getElementById('article-mode').value;
+    const sheetName = sheetSelect ? sheetSelect.value : '';
 
     if (!file) {
         alert('Пожалуйста, выберите файл.');
@@ -149,7 +194,7 @@ uploadButton.addEventListener('click', async () => {
     }
 
     const mappings = {};
-    const requiredColumns = ['Артикул', 'Наименование', 'Тариф с НДС, руб'];
+    const requiredColumns = mainRequiredColumns;
     requiredColumns.forEach(requiredCol => {
         const selectedIndex = document.getElementById(`select-${requiredCol}`).value;
         if (selectedIndex !== '') {
@@ -176,6 +221,9 @@ uploadButton.addEventListener('click', async () => {
     formData.append('article_mode', articleMode);
     formData.append('batch_size', isNaN(batchSize) ? 16 : batchSize);
     formData.append('points_batch_size', isNaN(pointsBatchSize) ? 200 : pointsBatchSize);
+    if (sheetName) {
+        formData.append('sheet_name', sheetName);
+    }
 
     const pollStatus = async (jobId) => {
         const response = await fetch(`/upload_status/${jobId}`);

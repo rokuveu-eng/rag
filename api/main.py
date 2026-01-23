@@ -195,12 +195,18 @@ async def process_xlsx_upload(
     points_batch_size: int,
     article_mode: str = "price",
     job_id: str = None,
+    sheet_name: Optional[str] = None,
 ):
     if points_batch_size <= 0:
         raise HTTPException(status_code=400, detail="points_batch_size must be > 0")
 
     workbook = openpyxl.load_workbook(io.BytesIO(contents))
-    sheet = workbook.active
+    if sheet_name:
+        if sheet_name not in workbook.sheetnames:
+            raise HTTPException(status_code=400, detail=f"Sheet '{sheet_name}' not found")
+        sheet = workbook[sheet_name]
+    else:
+        sheet = workbook.active
 
     rows = list(sheet.iter_rows(min_row=skip_rows + 2, values_only=True))
     documents = []
@@ -349,6 +355,7 @@ async def upload_processed_xlsx(
     article_mode: str = Form("price"),
     batch_size: int = Form(16),
     points_batch_size: int = Form(200),
+    sheet_name: Optional[str] = Form(None),
 ):
     logger.info(f"Received request to /upload_processed_xlsx for collection: {collection_name}")
     logger.info(
@@ -371,6 +378,7 @@ async def upload_processed_xlsx(
             batch_size=batch_size,
             points_batch_size=points_batch_size,
             article_mode=article_mode,
+            sheet_name=sheet_name,
         )
     except Exception as e:
         logger.error(f"Error processing file: {e}", exc_info=True)
@@ -388,6 +396,7 @@ async def run_upload_job(
     batch_size: int,
     points_batch_size: int,
     article_mode: str,
+    sheet_name: Optional[str],
 ):
     try:
         await process_xlsx_upload(
@@ -400,6 +409,7 @@ async def run_upload_job(
             points_batch_size=points_batch_size,
             article_mode=article_mode,
             job_id=job_id,
+            sheet_name=sheet_name,
         )
     except Exception as exc:
         logger.error("Async upload job failed: %s", exc, exc_info=True)
@@ -415,6 +425,7 @@ async def upload_processed_xlsx_async(
     article_mode: str = Form("price"),
     batch_size: int = Form(16),
     points_batch_size: int = Form(200),
+    sheet_name: Optional[str] = Form(None),
 ):
     logger.info(f"Received request to /upload_processed_xlsx_async for collection: {collection_name}")
     logger.info(
@@ -445,6 +456,7 @@ async def upload_processed_xlsx_async(
             batch_size=batch_size,
             points_batch_size=points_batch_size,
             article_mode=article_mode,
+            sheet_name=sheet_name,
         )
     )
     return {"status": "started", "job_id": job_id}
