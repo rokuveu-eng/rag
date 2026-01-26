@@ -742,18 +742,46 @@ async def search(
     query: str = Query(...),
     collection_name: str = Query(...),
     only_in_stock: bool = Query(False),
+    mode: str = Query("hybrid"),
 ):
-    # Dense vector for semantic search from Ollama
-    dense_vector = await get_ollama_embedding(query)
+    mode = mode.lower().strip()
+    if mode not in {"hybrid", "dense", "sparse"}:
+        raise HTTPException(status_code=400, detail="mode must be hybrid, dense or sparse")
 
-    # Sparse vector from FastEmbed (No more re-indexing!)
-    sparse_vector_gen = list(sparse_embedding_model.embed([query]))[0]
-    sparse_vector = models.SparseVector(
-        indices=sparse_vector_gen.indices.tolist(),
-        values=sparse_vector_gen.values.tolist(),
-    )
+    dense_vector = None
+    sparse_vector = None
+
+    if mode in {"hybrid", "dense"}:
+        # Dense vector for semantic search from Ollama
+        dense_vector = await get_ollama_embedding(query)
+
+    if mode in {"hybrid", "sparse"}:
+        # Sparse vector from FastEmbed (No more re-indexing!)
+        sparse_vector_gen = list(sparse_embedding_model.embed([query]))[0]
+        sparse_vector = models.SparseVector(
+            indices=sparse_vector_gen.indices.tolist(),
+            values=sparse_vector_gen.values.tolist(),
+        )
 
     def query_points(limit: int, query_filter: Optional[models.Filter]):
+        if mode == "dense":
+            return qdrant_client.query_points(
+                collection_name=collection_name,
+                query=dense_vector,
+                using="text-dense",
+                limit=limit,
+                with_payload=True,
+                query_filter=query_filter,
+            ).points
+        if mode == "sparse":
+            return qdrant_client.query_points(
+                collection_name=collection_name,
+                query=sparse_vector,
+                using="text-sparse",
+                limit=limit,
+                with_payload=True,
+                query_filter=query_filter,
+            ).points
         return qdrant_client.query_points(
             collection_name=collection_name,
             prefetch=[
@@ -774,7 +802,7 @@ async def search(
             query_filter=query_filter,
         ).points
 
-    # Hybrid search using Query API (Prefetch + Fusion RRF) - Requires qdrant-client >= 1.10.0
+    # Hybrid/sparse/dense search using Query API
     try:
         in_stock_filter = models.Filter(
             must=[
@@ -787,7 +815,14 @@ async def search(
 
         if only_in_stock:
             points = query_points(15, in_stock_filter)
-            return {"results": points}
+            return {
+                "results": points,
+                "debug": {
+                    "mode": mode,
+                    "dense_dim": len(dense_vector) if dense_vector is not None else None,
+                    "sparse_nonzero": len(sparse_vector.indices) if sparse_vector is not None else None,
+                },
+            }
 
         in_stock_points = query_points(5, in_stock_filter)
         general_points = query_points(15, None)
@@ -802,7 +837,14 @@ async def search(
             if len(combined) >= 15:
                 break
 
-        return {"results": combined}
+        return {
+            "results": combined,
+            "debug": {
+                "mode": mode,
+                "dense_dim": len(dense_vector) if dense_vector is not None else None,
+                "sparse_nonzero": len(sparse_vector.indices) if sparse_vector is not None else None,
+            },
+        }
     except Exception as e:
         logger.error(f"Search failed: {e}", exc_info=True)
         # Return error details to the client for easier debugging
