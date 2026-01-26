@@ -232,7 +232,6 @@ async def process_xlsx_upload(
         text_to_embed = (
             f"Артикул - {article_raw}, "
             f"Наименование - {name_raw}, "
-            f"Тариф с НДС, руб - {get_val(mappings['Тариф с НДС, руб'])}, "
             f"Имя файла - {file_name}"
         )
         documents.append(text_to_embed)
