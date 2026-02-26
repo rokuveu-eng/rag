@@ -104,6 +104,16 @@ def create_collection(collection_name: str):
             },
         )
 
+
+@app.delete("/collection")
+async def delete_collection(collection_name: str = Query(...)):
+    try:
+        qdrant_client.delete_collection(collection_name=collection_name)
+        return {"status": "deleted", "collection_name": collection_name}
+    except Exception as exc:
+        logger.error("Failed to delete collection %s: %s", collection_name, exc, exc_info=True)
+        raise HTTPException(status_code=500, detail=str(exc))
+
 async def get_ollama_embeddings(texts, concurrency=4):
     async with httpx.AsyncClient(timeout=300.0) as client:
         # Try batch endpoint first (if supported by Ollama)

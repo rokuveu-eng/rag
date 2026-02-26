@@ -160,6 +160,7 @@
         <div class="tabs">
             <button class="tab-button active" data-tab="index">Основная загрузка</button>
             <button class="tab-button" data-tab="stock">Остатки</button>
+            <button class="tab-button" data-tab="delete">Удаление</button>
         </div>
 
         <div class="tab-content active" id="tab-index">
@@ -260,6 +261,22 @@
                 <h2>Сопоставление столбцов</h2>
                 <div id="stock-column-mappings" class="mappings"></div>
                 <button id="stock-upload-data" style="display:none;">Обновить остатки</button>
+            </div>
+        </div>
+
+        <div class="tab-content" id="tab-delete">
+            <div class="grid">
+                <div>
+                    <label for="delete-collection-name">Имя коллекции</label>
+                    <input type="text" id="delete-collection-name" value="my_collection">
+                    <div class="hint">Будут удалены все векторы и индексы коллекции.</div>
+                </div>
+            </div>
+
+            <div class="section">
+                <button id="delete-collection-button" style="background: #ef4444;">Удалить коллекцию</button>
+                <div class="status" id="delete-status-text">Статус: ожидание.</div>
+                <div class="log-output" id="delete-log-output">Логи удаления появятся здесь.</div>
             </div>
         </div>
     </div>

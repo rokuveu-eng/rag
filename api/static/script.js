@@ -14,6 +14,10 @@ const stockStatusText = document.getElementById('stock-status-text');
 const stockProgressFill = document.getElementById('stock-progress-fill');
 const stockLogOutput = document.getElementById('stock-log-output');
 
+const deleteCollectionButton = document.getElementById('delete-collection-button');
+const deleteStatusText = document.getElementById('delete-status-text');
+const deleteLogOutput = document.getElementById('delete-log-output');
+
 const setStatus = (message) => {
     statusText.textContent = `Статус: ${message}`;
 };
@@ -40,6 +44,21 @@ const addStockLog = (message) => {
 const setStockProgress = (value) => {
     const safeValue = Math.max(0, Math.min(100, value));
     stockProgressFill.style.width = `${safeValue}%`;
+};
+
+const setDeleteStatus = (message) => {
+    if (!deleteStatusText) {
+        return;
+    }
+    deleteStatusText.textContent = `Статус: ${message}`;
+};
+
+const addDeleteLog = (message) => {
+    if (!deleteLogOutput) {
+        return;
+    }
+    const timestamp = new Date().toLocaleTimeString();
+    deleteLogOutput.textContent = `[${timestamp}] ${message}\n` + deleteLogOutput.textContent;
 };
 
 const tabButtons = document.querySelectorAll('.tab-button');
@@ -467,3 +486,45 @@ stockUploadButton.addEventListener('click', async () => {
         stockUploadButton.disabled = false;
     }
 });
+
+if (deleteCollectionButton) {
+    deleteCollectionButton.addEventListener('click', async () => {
+        const collectionName = document.getElementById('delete-collection-name').value;
+        if (!collectionName) {
+            alert('Введите имя коллекции.');
+            return;
+        }
+
+        const confirmed = confirm(
+            `Удалить коллекцию "${collectionName}"? Все данные, dense/sparse векторы и индексы будут удалены.`
+        );
+        if (!confirmed) {
+            return;
+        }
+
+        setDeleteStatus('удаление коллекции...');
+        addDeleteLog(`Запрос удаления: ${collectionName}`);
+        deleteCollectionButton.disabled = true;
+
+        try {
+            const response = await fetch(`/collection?collection_name=${encodeURIComponent(collectionName)}`, {
+                method: 'DELETE'
+            });
+
+            if (!response.ok) {
+                const payload = await response.json().catch(() => ({}));
+                throw new Error(payload.detail || 'Не удалось удалить коллекцию.');
+            }
+
+            const payload = await response.json();
+            setDeleteStatus('коллекция удалена');
+            addDeleteLog(`Удалено: ${payload.collection_name}`);
+        } catch (error) {
+            setDeleteStatus('ошибка удаления');
+            addDeleteLog(`Ошибка: ${error.message}`);
+            alert(error.message);
+        } finally {
+            deleteCollectionButton.disabled = false;
+        }
+    });
+}
