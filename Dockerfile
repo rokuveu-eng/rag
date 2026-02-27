@@ -5,7 +5,7 @@ WORKDIR /app
 COPY ./api/requirements.txt /app/
 RUN apt-get update && apt-get install -y \
     build-essential g++ make cmake \
-    tesseract-ocr poppler-utils
+    tesseract-ocr tesseract-ocr-rus poppler-utils
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY ./api /app/
