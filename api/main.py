@@ -428,6 +428,8 @@ async def search_passports(
 
         stage1_results = []
         pdf_counts = {}
+        best_point = None
+        best_score = None
         for point in stage1_points:
             payload = point.payload or {}
             stage1_results.append(
@@ -438,11 +440,13 @@ async def search_passports(
                 }
             )
             pdf_name = payload.get("pdf_name")
-            if not pdf_name:
-                continue
-            pdf_counts[pdf_name] = pdf_counts.get(pdf_name, 0) + 1
+            if pdf_name:
+                pdf_counts[pdf_name] = pdf_counts.get(pdf_name, 0) + 1
+            if best_score is None or (point.score is not None and point.score > best_score):
+                best_score = point.score
+                best_point = point
 
-        selected_pdf = max(pdf_counts, key=pdf_counts.get) if pdf_counts else None
+        selected_pdf = (best_point.payload or {}).get("pdf_name") if best_point else None
         if not selected_pdf:
             return {
                 "results": [],
@@ -453,6 +457,7 @@ async def search_passports(
                     "sparse_nonzero": len(sparse_vector.indices),
                     "stage1_hits": len(stage1_points),
                     "stage1_pdf_counts": pdf_counts,
+                    "stage1_best_score": best_score,
                 },
             }
 
@@ -495,6 +500,7 @@ async def search_passports(
                 "sparse_nonzero": len(sparse_vector.indices),
                 "stage1_hits": len(stage1_points),
                 "stage1_pdf_counts": pdf_counts,
+                "stage1_best_score": best_score,
             },
         }
     except Exception as exc:
