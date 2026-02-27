@@ -117,6 +117,26 @@ def ocr_pdf_bytes(contents: bytes) -> str:
     return "\n".join(extracted).strip()
 
 
+def chunk_text(text: str, *, max_chars: int = 2000, overlap: int = 200) -> List[str]:
+    if not text:
+        return []
+    normalized = re.sub(r"\s+", " ", text).strip()
+    if len(normalized) <= max_chars:
+        return [normalized]
+    chunks = []
+    start = 0
+    length = len(normalized)
+    while start < length:
+        end = min(start + max_chars, length)
+        chunk = normalized[start:end].strip()
+        if chunk:
+            chunks.append(chunk)
+        if end >= length:
+            break
+        start = max(0, end - overlap)
+    return chunks
+
+
 async def process_passports_upload(
     *,
     files: List[UploadFile],
@@ -137,16 +157,23 @@ async def process_passports_upload(
         if not text:
             skipped += 1
             continue
-        documents.append(text)
-        payloads.append(
-            {
-                "pdf_name": file.filename,
-                "page_range": "1-2",
-                "source": "ocr",
-                "article": None,
-                "text": text,
-            }
-        )
+        chunks = chunk_text(text)
+        if not chunks:
+            skipped += 1
+            continue
+        for chunk_index, chunk in enumerate(chunks, start=1):
+            documents.append(chunk)
+            payloads.append(
+                {
+                    "pdf_name": file.filename,
+                    "page_range": "1-2",
+                    "source": "ocr",
+                    "article": None,
+                    "text": chunk,
+                    "chunk_id": chunk_index,
+                    "chunks_total": len(chunks),
+                }
+            )
 
     if not documents:
         raise HTTPException(status_code=400, detail="No text extracted from PDF files")
@@ -188,9 +215,9 @@ async def process_passports_upload(
     duration = perf_counter() - total_start
     return {
         "status": "success",
-        "indexed_files": indexed,
+        "indexed_chunks": indexed,
         "skipped_files": skipped,
-        "total_files": len(documents) + skipped,
+        "total_chunks": len(documents),
         "duration_sec": round(duration, 3),
     }
 
