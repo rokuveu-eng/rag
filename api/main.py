@@ -423,6 +423,7 @@ async def search_passports(
             query=models.FusionQuery(fusion=models.Fusion.RRF),
             limit=limit,
             with_payload=True,
+            with_vectors=True,
         ).points
 
         pdf_counts = {}
@@ -472,6 +473,7 @@ async def search_passports(
             query=models.FusionQuery(fusion=models.Fusion.RRF),
             limit=limit,
             with_payload=True,
+            with_vectors=True,
             query_filter=pdf_filter,
         ).points
 

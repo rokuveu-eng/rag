@@ -745,9 +745,24 @@ if (passportsSearchButton) {
                 const payloadData = item.payload || {};
                 const text = payloadData.text || '';
                 const preview = text.length > 500 ? `${text.slice(0, 500)}...` : text;
+                const vectors = item.vector || {};
+                const denseVector = vectors['text-dense'] || [];
+                const sparseVector = vectors['text-sparse'] || {};
+                const densePreview = denseVector.length
+                    ? JSON.stringify(denseVector.slice(0, 10)) + (denseVector.length > 10 ? ' ...' : '')
+                    : 'n/a';
+                const sparseIndices = sparseVector.indices || [];
+                const sparseValues = sparseVector.values || [];
+                const sparsePreview = sparseIndices.length
+                    ? JSON.stringify(
+                        sparseIndices.slice(0, 10).map((idx, i) => [idx, sparseValues[i]])
+                    ) + (sparseIndices.length > 10 ? ' ...' : '')
+                    : 'n/a';
                 return [
                     `#${index + 1} PDF: ${payloadData.pdf_name || 'unknown'} | страницы ${payloadData.page_range || ''}`,
                     preview,
+                    `Dense vector (first 10): ${densePreview}`,
+                    `Sparse vector (idx,val first 10): ${sparsePreview}`,
                     ''
                 ].join('\n');
             }).join('\n');
