@@ -718,13 +718,30 @@ if (passportsSearchButton) {
 
             const payload = await response.json();
             const results = payload.results || [];
+            const selectedPdf = payload.selected_pdf || 'не выбран';
+            const debug = payload.debug || {};
+            const stage1Hits = debug.stage1_hits ?? 'n/a';
+            const sparseNonzero = debug.sparse_nonzero ?? 'n/a';
+            const denseDim = debug.dense_dim ?? 'n/a';
+            const pdfCounts = debug.stage1_pdf_counts || {};
+
+            addPassportsLog(
+                `Выбранный PDF: ${selectedPdf} | stage1 hits: ${stage1Hits} | ` +
+                `dense_dim: ${denseDim} | sparse_nonzero: ${sparseNonzero}`
+            );
+
             if (!results.length) {
                 setPassportsSearchStatus('ничего не найдено');
-                setPassportsSearchOutput('Результаты не найдены.');
+                setPassportsSearchOutput(
+                    `Результаты не найдены.\n` +
+                    `Выбранный PDF: ${selectedPdf}\n` +
+                    `Stage1 hits: ${stage1Hits}\n` +
+                    `PDF статистика: ${JSON.stringify(pdfCounts, null, 2)}`
+                );
                 return;
             }
 
-            const formatted = results.map((item, index) => {
+            const formattedResults = results.map((item, index) => {
                 const payloadData = item.payload || {};
                 const text = payloadData.text || '';
                 const preview = text.length > 500 ? `${text.slice(0, 500)}...` : text;
@@ -735,8 +752,18 @@ if (passportsSearchButton) {
                 ].join('\n');
             }).join('\n');
 
+            const formattedSummary = [
+                `Выбранный PDF: ${selectedPdf}`,
+                `Stage1 hits: ${stage1Hits}`,
+                `Dense dim: ${denseDim}`,
+                `Sparse nonzero: ${sparseNonzero}`,
+                `PDF статистика: ${JSON.stringify(pdfCounts, null, 2)}`,
+                '',
+                formattedResults,
+            ].join('\n');
+
             setPassportsSearchStatus('готово');
-            setPassportsSearchOutput(formatted);
+            setPassportsSearchOutput(formattedSummary);
         } catch (error) {
             setPassportsSearchStatus('ошибка поиска');
             setPassportsSearchOutput(`Ошибка: ${error.message}`);
