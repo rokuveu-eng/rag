@@ -22,6 +22,7 @@ import importlib.metadata
 from time import perf_counter
 from typing import Optional, List
 import uuid
+import shutil
 from pdf2image import convert_from_bytes
 import pytesseract
 
@@ -56,6 +57,7 @@ qdrant_client = QdrantClient(host=os.getenv("QDRANT_HOST", "qdrant"), port=int(o
 upload_jobs = {}
 stock_jobs = {}
 passports_jobs = {}
+hf_home = os.getenv("HF_HOME", os.path.expanduser("~/.cache/huggingface"))
 
 def default_ollama_base_url():
     if os.path.exists("/.dockerenv"):
@@ -339,6 +341,55 @@ async def passports_status(job_id: str):
     if job_id not in passports_jobs:
         raise HTTPException(status_code=404, detail="Job not found")
     return passports_jobs[job_id]
+
+
+@app.get("/hf_cache/info")
+async def hf_cache_info():
+    cache_dir = os.getenv("HF_HUB_CACHE", os.path.join(hf_home, "hub"))
+    total_bytes = 0
+    file_count = 0
+    if os.path.exists(cache_dir):
+        for root, _, files in os.walk(cache_dir):
+            for file in files:
+                file_path = os.path.join(root, file)
+                try:
+                    total_bytes += os.path.getsize(file_path)
+                    file_count += 1
+                except OSError:
+                    continue
+    return {
+        "hf_home": hf_home,
+        "hf_hub_cache": cache_dir,
+        "exists": os.path.exists(cache_dir),
+        "file_count": file_count,
+        "size_mb": round(total_bytes / (1024 * 1024), 2),
+    }
+
+
+@app.post("/hf_cache/clear")
+async def hf_cache_clear():
+    cache_dir = os.getenv("HF_HUB_CACHE", os.path.join(hf_home, "hub"))
+    if not os.path.exists(cache_dir):
+        return {
+            "status": "already_empty",
+            "hf_hub_cache": cache_dir,
+        }
+
+    for entry in os.listdir(cache_dir):
+        path = os.path.join(cache_dir, entry)
+        try:
+            if os.path.isdir(path):
+                shutil.rmtree(path)
+            else:
+                os.remove(path)
+        except OSError as exc:
+            logger.error("Failed to delete %s: %s", path, exc)
+            raise HTTPException(status_code=500, detail=f"Failed to delete {path}: {exc}")
+
+    return {
+        "status": "cleared",
+        "hf_hub_cache": cache_dir,
+    }
 
 
 @app.get("/search_passports")

@@ -25,6 +25,15 @@ const passportsSearchButton = document.getElementById('passports-search-button')
 const passportsSearchStatus = document.getElementById('passports-search-status');
 const passportsSearchOutput = document.getElementById('passports-search-output');
 
+const hfCacheRefreshButton = document.getElementById('hf-cache-refresh');
+const hfCacheClearButton = document.getElementById('hf-cache-clear');
+const hfCacheStatus = document.getElementById('hf-cache-status');
+const hfCacheLog = document.getElementById('hf-cache-log');
+const hfHomePath = document.getElementById('hf-home-path');
+const hfHubCachePath = document.getElementById('hf-hub-cache-path');
+const hfCacheSize = document.getElementById('hf-cache-size');
+const hfCacheFiles = document.getElementById('hf-cache-files');
+
 const setStatus = (message) => {
     statusText.textContent = `Статус: ${message}`;
 };
@@ -95,6 +104,36 @@ const setPassportsSearchOutput = (message) => {
         return;
     }
     passportsSearchOutput.textContent = message;
+};
+
+const setHfCacheStatus = (message) => {
+    if (!hfCacheStatus) {
+        return;
+    }
+    hfCacheStatus.textContent = `Статус: ${message}`;
+};
+
+const addHfCacheLog = (message) => {
+    if (!hfCacheLog) {
+        return;
+    }
+    const timestamp = new Date().toLocaleTimeString();
+    hfCacheLog.textContent = `[${timestamp}] ${message}\n` + hfCacheLog.textContent;
+};
+
+const renderHfCacheInfo = (payload) => {
+    if (hfHomePath) {
+        hfHomePath.value = payload.hf_home || '';
+    }
+    if (hfHubCachePath) {
+        hfHubCachePath.value = payload.hf_hub_cache || '';
+    }
+    if (hfCacheSize) {
+        hfCacheSize.value = (payload.size_mb ?? 0).toString();
+    }
+    if (hfCacheFiles) {
+        hfCacheFiles.value = (payload.file_count ?? 0).toString();
+    }
 };
 
 const tabButtons = document.querySelectorAll('.tab-button');
@@ -704,6 +743,64 @@ if (passportsSearchButton) {
             alert(error.message);
         } finally {
             passportsSearchButton.disabled = false;
+        }
+    });
+}
+
+const fetchHfCacheInfo = async () => {
+    const response = await fetch('/hf_cache/info');
+    if (!response.ok) {
+        const payload = await response.json().catch(() => ({}));
+        throw new Error(payload.detail || 'Не удалось получить информацию о кэше.');
+    }
+    return response.json();
+};
+
+if (hfCacheRefreshButton) {
+    hfCacheRefreshButton.addEventListener('click', async () => {
+        setHfCacheStatus('обновление информации...');
+        hfCacheRefreshButton.disabled = true;
+        try {
+            const payload = await fetchHfCacheInfo();
+            renderHfCacheInfo(payload);
+            addHfCacheLog('Информация о кэше обновлена.');
+            setHfCacheStatus('готово');
+        } catch (error) {
+            setHfCacheStatus('ошибка');
+            addHfCacheLog(`Ошибка: ${error.message}`);
+            alert(error.message);
+        } finally {
+            hfCacheRefreshButton.disabled = false;
+        }
+    });
+}
+
+if (hfCacheClearButton) {
+    hfCacheClearButton.addEventListener('click', async () => {
+        const confirmed = confirm('Очистить HF‑кэш? Модели будут скачиваться заново.');
+        if (!confirmed) {
+            return;
+        }
+
+        setHfCacheStatus('очистка кэша...');
+        hfCacheClearButton.disabled = true;
+        try {
+            const response = await fetch('/hf_cache/clear', { method: 'POST' });
+            if (!response.ok) {
+                const payload = await response.json().catch(() => ({}));
+                throw new Error(payload.detail || 'Не удалось очистить кэш.');
+            }
+            const payload = await response.json();
+            addHfCacheLog(`Кэш очищен: ${payload.hf_hub_cache || ''}`);
+            setHfCacheStatus('кэш очищен');
+            const info = await fetchHfCacheInfo();
+            renderHfCacheInfo(info);
+        } catch (error) {
+            setHfCacheStatus('ошибка');
+            addHfCacheLog(`Ошибка: ${error.message}`);
+            alert(error.message);
+        } finally {
+            hfCacheClearButton.disabled = false;
         }
     });
 }

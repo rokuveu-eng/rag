@@ -162,6 +162,7 @@
             <button class="tab-button" data-tab="stock">Остатки</button>
             <button class="tab-button" data-tab="passports">Паспорта</button>
             <button class="tab-button" data-tab="delete">Удаление</button>
+            <button class="tab-button" data-tab="hf-cache">HF кэш</button>
         </div>
 
         <div class="tab-content active" id="tab-index">
@@ -326,6 +327,38 @@
                 <button id="delete-collection-button" style="background: #ef4444;">Удалить коллекцию</button>
                 <div class="status" id="delete-status-text">Статус: ожидание.</div>
                 <div class="log-output" id="delete-log-output">Логи удаления появятся здесь.</div>
+            </div>
+        </div>
+
+        <div class="tab-content" id="tab-hf-cache">
+            <div class="grid">
+                <div>
+                    <label>Путь HF_HOME</label>
+                    <input type="text" id="hf-home-path" value="" readonly>
+                    <div class="hint">Директория для кэша моделей HuggingFace.</div>
+                </div>
+                <div>
+                    <label>Путь HF_HUB_CACHE</label>
+                    <input type="text" id="hf-hub-cache-path" value="" readonly>
+                    <div class="hint">Где хранятся веса моделей и токенизаторы.</div>
+                </div>
+                <div>
+                    <label>Размер кэша (MB)</label>
+                    <input type="text" id="hf-cache-size" value="" readonly>
+                    <div class="hint">Фактический размер модели/токенизатора на диске.</div>
+                </div>
+                <div>
+                    <label>Кол-во файлов</label>
+                    <input type="text" id="hf-cache-files" value="" readonly>
+                    <div class="hint">Количество файлов в кэше.</div>
+                </div>
+            </div>
+
+            <div class="section">
+                <button id="hf-cache-refresh">Обновить информацию</button>
+                <button id="hf-cache-clear" style="background: #ef4444;">Очистить HF‑кэш</button>
+                <div class="status" id="hf-cache-status">Статус: ожидание.</div>
+                <div class="log-output" id="hf-cache-log">Логи кэша появятся здесь.</div>
             </div>
         </div>
     </div>

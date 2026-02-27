@@ -26,6 +26,9 @@ services:
     build: .
     ports:
       - "8424:8424"
+    environment:
+      HF_HOME: /root/.cache/huggingface
+      HF_HUB_CACHE: /root/.cache/huggingface/hub
     volumes:
       - hf_cache:/root/.cache/huggingface
     depends_on:
