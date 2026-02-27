@@ -718,6 +718,7 @@ if (passportsSearchButton) {
 
             const payload = await response.json();
             const results = payload.results || [];
+            const stage1Results = payload.stage1_results || [];
             const selectedPdf = payload.selected_pdf || 'не выбран';
             const debug = payload.debug || {};
             const stage1Hits = debug.stage1_hits ?? 'n/a';
@@ -730,14 +731,32 @@ if (passportsSearchButton) {
                 `dense_dim: ${denseDim} | sparse_nonzero: ${sparseNonzero}`
             );
 
+            const formattedStage1 = stage1Results.map((item, index) => {
+                const payloadData = item.payload || {};
+                const text = payloadData.text || '';
+                const preview = text.length > 200 ? `${text.slice(0, 200)}...` : text;
+                const score = item.score ?? 'n/a';
+                return [
+                    `S1 #${index + 1} score: ${score} | PDF: ${payloadData.pdf_name || 'unknown'} | страницы ${payloadData.page_range || ''}`,
+                    preview,
+                    ''
+                ].join('\n');
+            }).join('\n');
+
             if (!results.length) {
+                const formattedSummary = [
+                    `Выбранный PDF: ${selectedPdf}`,
+                    `Stage1 hits: ${stage1Hits}`,
+                    `Dense dim: ${denseDim}`,
+                    `Sparse nonzero: ${sparseNonzero}`,
+                    `PDF статистика: ${JSON.stringify(pdfCounts, null, 2)}`,
+                    '',
+                    'Stage1 результаты (score):',
+                    formattedStage1 || 'n/a',
+                ].join('\n');
+
                 setPassportsSearchStatus('ничего не найдено');
-                setPassportsSearchOutput(
-                    `Результаты не найдены.\n` +
-                    `Выбранный PDF: ${selectedPdf}\n` +
-                    `Stage1 hits: ${stage1Hits}\n` +
-                    `PDF статистика: ${JSON.stringify(pdfCounts, null, 2)}`
-                );
+                setPassportsSearchOutput(formattedSummary);
                 return;
             }
 
@@ -773,6 +792,9 @@ if (passportsSearchButton) {
                 `Dense dim: ${denseDim}`,
                 `Sparse nonzero: ${sparseNonzero}`,
                 `PDF статистика: ${JSON.stringify(pdfCounts, null, 2)}`,
+                '',
+                'Stage1 результаты (score):',
+                formattedStage1 || 'n/a',
                 '',
                 formattedResults,
             ].join('\n');

@@ -426,9 +426,17 @@ async def search_passports(
             with_vectors=True,
         ).points
 
+        stage1_results = []
         pdf_counts = {}
         for point in stage1_points:
             payload = point.payload or {}
+            stage1_results.append(
+                {
+                    "id": str(point.id),
+                    "score": point.score,
+                    "payload": payload,
+                }
+            )
             pdf_name = payload.get("pdf_name")
             if not pdf_name:
                 continue
@@ -438,6 +446,7 @@ async def search_passports(
         if not selected_pdf:
             return {
                 "results": [],
+                "stage1_results": stage1_results,
                 "selected_pdf": None,
                 "debug": {
                     "dense_dim": len(dense_vector),
@@ -479,6 +488,7 @@ async def search_passports(
 
         return {
             "results": stage2_points,
+            "stage1_results": stage1_results,
             "selected_pdf": selected_pdf,
             "debug": {
                 "dense_dim": len(dense_vector),
