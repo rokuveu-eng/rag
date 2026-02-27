@@ -18,6 +18,13 @@ const deleteCollectionButton = document.getElementById('delete-collection-button
 const deleteStatusText = document.getElementById('delete-status-text');
 const deleteLogOutput = document.getElementById('delete-log-output');
 
+const passportsUploadButton = document.getElementById('passports-upload-button');
+const passportsStatusText = document.getElementById('passports-status-text');
+const passportsLogOutput = document.getElementById('passports-log-output');
+const passportsSearchButton = document.getElementById('passports-search-button');
+const passportsSearchStatus = document.getElementById('passports-search-status');
+const passportsSearchOutput = document.getElementById('passports-search-output');
+
 const setStatus = (message) => {
     statusText.textContent = `Статус: ${message}`;
 };
@@ -59,6 +66,35 @@ const addDeleteLog = (message) => {
     }
     const timestamp = new Date().toLocaleTimeString();
     deleteLogOutput.textContent = `[${timestamp}] ${message}\n` + deleteLogOutput.textContent;
+};
+
+const setPassportsStatus = (message) => {
+    if (!passportsStatusText) {
+        return;
+    }
+    passportsStatusText.textContent = `Статус: ${message}`;
+};
+
+const addPassportsLog = (message) => {
+    if (!passportsLogOutput) {
+        return;
+    }
+    const timestamp = new Date().toLocaleTimeString();
+    passportsLogOutput.textContent = `[${timestamp}] ${message}\n` + passportsLogOutput.textContent;
+};
+
+const setPassportsSearchStatus = (message) => {
+    if (!passportsSearchStatus) {
+        return;
+    }
+    passportsSearchStatus.textContent = `Статус: ${message}`;
+};
+
+const setPassportsSearchOutput = (message) => {
+    if (!passportsSearchOutput) {
+        return;
+    }
+    passportsSearchOutput.textContent = message;
 };
 
 const tabButtons = document.querySelectorAll('.tab-button');
@@ -525,6 +561,115 @@ if (deleteCollectionButton) {
             alert(error.message);
         } finally {
             deleteCollectionButton.disabled = false;
+        }
+    });
+}
+
+if (passportsUploadButton) {
+    passportsUploadButton.addEventListener('click', async () => {
+        const fileInput = document.getElementById('passports-files');
+        const collectionName = document.getElementById('passports-collection-name').value;
+        const batchSize = parseInt(document.getElementById('passports-batch-size').value, 10);
+        const pointsBatchSize = parseInt(document.getElementById('passports-points-batch-size').value, 10);
+        const files = fileInput.files;
+
+        if (!files || files.length === 0) {
+            alert('Пожалуйста, выберите PDF файлы.');
+            return;
+        }
+
+        if (files.length > 30) {
+            alert('Можно выбрать не более 30 файлов за раз.');
+            return;
+        }
+
+        setPassportsStatus('загрузка файлов...');
+        addPassportsLog(`Отправка ${files.length} файлов.`);
+        passportsUploadButton.disabled = true;
+
+        const formData = new FormData();
+        Array.from(files).forEach((file) => formData.append('files', file));
+        formData.append('collection_name', collectionName);
+        formData.append('batch_size', isNaN(batchSize) ? 8 : batchSize);
+        formData.append('points_batch_size', isNaN(pointsBatchSize) ? 200 : pointsBatchSize);
+
+        try {
+            const response = await fetch('/upload_passports', {
+                method: 'POST',
+                body: formData
+            });
+
+            if (!response.ok) {
+                const payload = await response.json().catch(() => ({}));
+                throw new Error(payload.detail || 'Ошибка загрузки паспортов.');
+            }
+
+            const payload = await response.json();
+            setPassportsStatus(`успех! Загружено: ${payload.indexed_files}, пропущено: ${payload.skipped_files}`);
+            addPassportsLog(`Готово за ${payload.duration_sec || 0} сек.`);
+        } catch (error) {
+            setPassportsStatus('ошибка загрузки');
+            addPassportsLog(`Ошибка: ${error.message}`);
+            alert(error.message);
+        } finally {
+            passportsUploadButton.disabled = false;
+        }
+    });
+}
+
+if (passportsSearchButton) {
+    passportsSearchButton.addEventListener('click', async () => {
+        const collectionName = document.getElementById('passports-collection-name').value;
+        const query = document.getElementById('passports-search-query').value.trim();
+        const limit = parseInt(document.getElementById('passports-search-limit').value, 10) || 5;
+
+        if (!query) {
+            alert('Введите поисковый запрос.');
+            return;
+        }
+
+        setPassportsSearchStatus('поиск...');
+        setPassportsSearchOutput('');
+        passportsSearchButton.disabled = true;
+
+        try {
+            const response = await fetch(
+                `/search_passports?collection_name=${encodeURIComponent(collectionName)}` +
+                `&query=${encodeURIComponent(query)}&limit=${limit}`
+            );
+
+            if (!response.ok) {
+                const payload = await response.json().catch(() => ({}));
+                throw new Error(payload.detail || 'Ошибка поиска.');
+            }
+
+            const payload = await response.json();
+            const results = payload.results || [];
+            if (!results.length) {
+                setPassportsSearchStatus('ничего не найдено');
+                setPassportsSearchOutput('Результаты не найдены.');
+                return;
+            }
+
+            const formatted = results.map((item, index) => {
+                const payloadData = item.payload || {};
+                const text = payloadData.text || '';
+                const preview = text.length > 500 ? `${text.slice(0, 500)}...` : text;
+                return [
+                    `#${index + 1} PDF: ${payloadData.pdf_name || 'unknown'} | страницы ${payloadData.page_range || ''}`,
+                    preview,
+                    ''
+                ].join('\n');
+            }).join('\n');
+
+            setPassportsSearchStatus('готово');
+            setPassportsSearchOutput(formatted);
+        } catch (error) {
+            setPassportsSearchStatus('ошибка поиска');
+            setPassportsSearchOutput(`Ошибка: ${error.message}`);
+            alert(error.message);
+        } finally {
+            passportsSearchButton.disabled = false;
         }
     });
 }

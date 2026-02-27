@@ -160,6 +160,7 @@
         <div class="tabs">
             <button class="tab-button active" data-tab="index">Основная загрузка</button>
             <button class="tab-button" data-tab="stock">Остатки</button>
+            <button class="tab-button" data-tab="passports">Паспорта</button>
             <button class="tab-button" data-tab="delete">Удаление</button>
         </div>
 
@@ -261,6 +262,54 @@
                 <h2>Сопоставление столбцов</h2>
                 <div id="stock-column-mappings" class="mappings"></div>
                 <button id="stock-upload-data" style="display:none;">Обновить остатки</button>
+            </div>
+        </div>
+
+        <div class="tab-content" id="tab-passports">
+            <div class="grid">
+                <div>
+                    <label for="passports-collection-name">Имя коллекции</label>
+                    <input type="text" id="passports-collection-name" value="passports_collection">
+                    <div class="hint">Коллекция для паспортов (PDF).</div>
+                </div>
+                <div>
+                    <label for="passports-batch-size">Batch size</label>
+                    <input type="number" id="passports-batch-size" value="8" min="1" max="32">
+                    <div class="hint">Размер пачки для эмбеддингов.</div>
+                </div>
+                <div>
+                    <label for="passports-points-batch-size">Points batch size</label>
+                    <input type="number" id="passports-points-batch-size" value="200" min="1" max="1000">
+                    <div class="hint">Размер чанка для записи в Qdrant.</div>
+                </div>
+                <div>
+                    <label for="passports-files">PDF паспорта (до 30)</label>
+                    <input type="file" id="passports-files" accept=".pdf" multiple />
+                    <div class="hint">Можно выбрать до 30 файлов за раз.</div>
+                </div>
+            </div>
+
+            <div class="section">
+                <button id="passports-upload-button">Загрузить паспорта</button>
+                <div class="status" id="passports-status-text">Статус: ожидание файлов.</div>
+                <div class="log-output" id="passports-log-output">Логи загрузки появятся здесь.</div>
+            </div>
+
+            <div class="section">
+                <h2>Поиск по паспортам (гибридный)</h2>
+                <div class="grid">
+                    <div>
+                        <label for="passports-search-query">Запрос</label>
+                        <input type="text" id="passports-search-query" placeholder="Введите запрос">
+                    </div>
+                    <div>
+                        <label for="passports-search-limit">Лимит</label>
+                        <input type="number" id="passports-search-limit" value="5" min="1" max="20">
+                    </div>
+                </div>
+                <button id="passports-search-button" style="margin-top: 12px;">Искать</button>
+                <div class="status" id="passports-search-status">Статус: ожидание запроса.</div>
+                <div class="log-output" id="passports-search-output">Результаты появятся здесь.</div>
             </div>
         </div>
 

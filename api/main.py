@@ -20,8 +20,10 @@ import fastembed
 import fastapi
 import importlib.metadata
 from time import perf_counter
-from typing import Optional
+from typing import Optional, List
 import uuid
+from pdf2image import convert_from_bytes
+import pytesseract
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -103,6 +105,158 @@ def create_collection(collection_name: str):
                 )
             },
         )
+
+
+def ocr_pdf_bytes(contents: bytes) -> str:
+    pages = convert_from_bytes(contents)
+    extracted = []
+    for page in pages:
+        text = pytesseract.image_to_string(page, lang="rus+eng")
+        if text:
+            extracted.append(text.strip())
+    return "\n".join(extracted).strip()
+
+
+async def process_passports_upload(
+    *,
+    files: List[UploadFile],
+    collection_name: str,
+    batch_size: int,
+    points_batch_size: int,
+):
+    if points_batch_size <= 0:
+        raise HTTPException(status_code=400, detail="points_batch_size must be > 0")
+
+    documents = []
+    payloads = []
+    skipped = 0
+
+    for file in files:
+        contents = await file.read()
+        text = ocr_pdf_bytes(contents)
+        if not text:
+            skipped += 1
+            continue
+        documents.append(text)
+        payloads.append(
+            {
+                "pdf_name": file.filename,
+                "page_range": "1-2",
+                "source": "ocr",
+                "article": None,
+                "text": text,
+            }
+        )
+
+    if not documents:
+        raise HTTPException(status_code=400, detail="No text extracted from PDF files")
+
+    total_start = perf_counter()
+    indexed = 0
+
+    for start in range(0, len(documents), batch_size):
+        batch_docs = documents[start : start + batch_size]
+        batch_payloads = payloads[start : start + batch_size]
+
+        dense_task = asyncio.create_task(get_ollama_embeddings(batch_docs))
+        sparse_vectors = list(sparse_embedding_model.embed(batch_docs))
+        dense_vectors = await dense_task
+
+        batch_points = []
+        for offset, dense_vector in enumerate(dense_vectors):
+            sparse_vector = sparse_vectors[offset]
+            qdrant_sparse_vector = models.SparseVector(
+                indices=sparse_vector.indices.tolist(),
+                values=sparse_vector.values.tolist(),
+            )
+            batch_points.append(
+                models.PointStruct(
+                    id=str(uuid.uuid4()),
+                    vector={
+                        "text-dense": dense_vector,
+                        "text-sparse": qdrant_sparse_vector,
+                    },
+                    payload=batch_payloads[offset],
+                )
+            )
+
+        for chunk_start in range(0, len(batch_points), points_batch_size):
+            chunk = batch_points[chunk_start : chunk_start + points_batch_size]
+            safe_upsert(collection_name, chunk)
+            indexed += len(chunk)
+
+    duration = perf_counter() - total_start
+    return {
+        "status": "success",
+        "indexed_files": indexed,
+        "skipped_files": skipped,
+        "total_files": len(documents) + skipped,
+        "duration_sec": round(duration, 3),
+    }
+
+
+@app.post("/upload_passports")
+async def upload_passports(
+    files: List[UploadFile] = File(...),
+    collection_name: str = Form(...),
+    batch_size: int = Form(8),
+    points_batch_size: int = Form(200),
+):
+    if len(files) > 30:
+        raise HTTPException(status_code=400, detail="Maximum 30 files per upload")
+
+    create_collection(collection_name)
+    return await process_passports_upload(
+        files=files,
+        collection_name=collection_name,
+        batch_size=batch_size,
+        points_batch_size=points_batch_size,
+    )
+
+
+@app.get("/search_passports")
+async def search_passports(
+    query: str = Query(...),
+    collection_name: str = Query(...),
+    limit: int = Query(5, ge=1, le=20),
+):
+    dense_vector = await get_ollama_embedding(query)
+    sparse_vector_gen = list(sparse_embedding_model.embed([query]))[0]
+    sparse_vector = models.SparseVector(
+        indices=sparse_vector_gen.indices.tolist(),
+        values=sparse_vector_gen.values.tolist(),
+    )
+
+    try:
+        points = qdrant_client.query_points(
+            collection_name=collection_name,
+            prefetch=[
+                models.Prefetch(
+                    query=sparse_vector,
+                    using="text-sparse",
+                    limit=20,
+                ),
+                models.Prefetch(
+                    query=dense_vector,
+                    using="text-dense",
+                    limit=20,
+                ),
+            ],
+            query=models.FusionQuery(fusion=models.Fusion.RRF),
+            limit=limit,
+            with_payload=True,
+        ).points
+
+        return {
+            "results": points,
+            "debug": {
+                "dense_dim": len(dense_vector),
+                "sparse_nonzero": len(sparse_vector.indices),
+            },
+        }
+    except Exception as exc:
+        logger.error("Passport search failed: %s", exc, exc_info=True)
+        raise HTTPException(status_code=500, detail=str(exc))
 
 
 @app.delete("/collection")
