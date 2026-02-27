@@ -412,16 +412,16 @@ async def search_passports(
                 models.Prefetch(
                     query=sparse_vector,
                     using="text-sparse",
-                    limit=20,
+                    limit=limit,
                 ),
                 models.Prefetch(
                     query=dense_vector,
                     using="text-dense",
-                    limit=20,
+                    limit=limit,
                 ),
             ],
             query=models.FusionQuery(fusion=models.Fusion.RRF),
-            limit=20,
+            limit=limit,
             with_payload=True,
         ).points
 
@@ -461,12 +461,12 @@ async def search_passports(
                 models.Prefetch(
                     query=sparse_vector,
                     using="text-sparse",
-                    limit=20,
+                    limit=limit,
                 ),
                 models.Prefetch(
                     query=dense_vector,
                     using="text-dense",
-                    limit=20,
+                    limit=limit,
                 ),
             ],
             query=models.FusionQuery(fusion=models.Fusion.RRF),
