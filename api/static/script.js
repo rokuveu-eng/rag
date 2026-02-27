@@ -593,20 +593,54 @@ if (passportsUploadButton) {
         formData.append('batch_size', isNaN(batchSize) ? 8 : batchSize);
         formData.append('points_batch_size', isNaN(pointsBatchSize) ? 200 : pointsBatchSize);
 
+        const pollStatus = async (jobId) => {
+            const response = await fetch(`/passports_status/${jobId}`);
+            if (!response.ok) {
+                throw new Error('Ошибка получения статуса загрузки паспортов.');
+            }
+            return response.json();
+        };
+
         try {
-            const response = await fetch('/upload_passports', {
+            const response = await fetch('/upload_passports_async', {
                 method: 'POST',
                 body: formData
             });
 
             if (!response.ok) {
                 const payload = await response.json().catch(() => ({}));
-                throw new Error(payload.detail || 'Ошибка загрузки паспортов.');
+                throw new Error(payload.detail || 'Ошибка старта загрузки паспортов.');
             }
 
-            const payload = await response.json();
-            setPassportsStatus(`успех! Загружено: ${payload.indexed_files}, пропущено: ${payload.skipped_files}`);
-            addPassportsLog(`Готово за ${payload.duration_sec || 0} сек.`);
+            const { job_id: jobId } = await response.json();
+            addPassportsLog(`Задача запущена: ${jobId}`);
+
+            let isRunning = true;
+            while (isRunning) {
+                await new Promise((resolve) => setTimeout(resolve, 1500));
+                const status = await pollStatus(jobId);
+
+                if (status.status === 'failed') {
+                    throw new Error(status.error || 'Ошибка обработки паспортов.');
+                }
+
+                const progressValue = status.progress ?? 0;
+                setPassportsStatus(`в процессе... ${progressValue}%`);
+
+                if (status.total_chunks) {
+                    addPassportsLog(
+                        `Прогресс: ${status.indexed_chunks || 0}/${status.total_chunks}`
+                    );
+                }
+
+                if (status.status === 'completed') {
+                    isRunning = false;
+                    setPassportsStatus(
+                        `успех! Чанков: ${status.indexed_chunks || 0}, пропущено файлов: ${status.skipped_files || 0}`
+                    );
+                    addPassportsLog(`Готово за ${status.duration_sec || 0} сек.`);
+                }
+            }
         } catch (error) {
             setPassportsStatus('ошибка загрузки');
             addPassportsLog(`Ошибка: ${error.message}`);

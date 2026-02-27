@@ -55,6 +55,7 @@ async def read_root():
 qdrant_client = QdrantClient(host=os.getenv("QDRANT_HOST", "qdrant"), port=int(os.getenv("QDRANT_PORT", "6333")))
 upload_jobs = {}
 stock_jobs = {}
+passports_jobs = {}
 
 def default_ollama_base_url():
     if os.path.exists("/.dockerenv"):
@@ -137,22 +138,11 @@ def chunk_text(text: str, *, max_chars: int = 2000, overlap: int = 200) -> List[
     return chunks
 
 
-async def process_passports_upload(
-    *,
-    files: List[UploadFile],
-    collection_name: str,
-    batch_size: int,
-    points_batch_size: int,
-):
-    if points_batch_size <= 0:
-        raise HTTPException(status_code=400, detail="points_batch_size must be > 0")
-
+def build_passport_documents(file_entries: List[tuple]):
     documents = []
     payloads = []
     skipped = 0
-
-    for file in files:
-        contents = await file.read()
+    for filename, contents in file_entries:
         text = ocr_pdf_bytes(contents)
         if not text:
             skipped += 1
@@ -165,7 +155,7 @@ async def process_passports_upload(
             documents.append(chunk)
             payloads.append(
                 {
-                    "pdf_name": file.filename,
+                    "pdf_name": filename,
                     "page_range": "1-2",
                     "source": "ocr",
                     "article": None,
@@ -174,12 +164,38 @@ async def process_passports_upload(
                     "chunks_total": len(chunks),
                 }
             )
+    return documents, payloads, skipped
+
+
+async def process_passports_upload(
+    *,
+    file_entries: List[tuple],
+    collection_name: str,
+    batch_size: int,
+    points_batch_size: int,
+    job_id: Optional[str] = None,
+):
+    if points_batch_size <= 0:
+        raise HTTPException(status_code=400, detail="points_batch_size must be > 0")
+
+    documents, payloads, skipped = build_passport_documents(file_entries)
 
     if not documents:
         raise HTTPException(status_code=400, detail="No text extracted from PDF files")
 
     total_start = perf_counter()
     indexed = 0
+    total_chunks = len(documents)
+
+    if job_id:
+        passports_jobs[job_id].update(
+            {
+                "status": "running",
+                "progress": 0,
+                "indexed_chunks": 0,
+                "total_chunks": total_chunks,
+            }
+        )
 
     for start in range(0, len(documents), batch_size):
         batch_docs = documents[start : start + batch_size]
@@ -212,14 +228,36 @@ async def process_passports_upload(
             safe_upsert(collection_name, chunk)
             indexed += len(chunk)
 
+            if job_id and total_chunks:
+                percent = (indexed / total_chunks) * 100
+                passports_jobs[job_id].update(
+                    {
+                        "status": "running",
+                        "progress": round(percent, 2),
+                        "indexed_chunks": indexed,
+                        "total_chunks": total_chunks,
+                    }
+                )
+
     duration = perf_counter() - total_start
-    return {
+    result = {
         "status": "success",
         "indexed_chunks": indexed,
         "skipped_files": skipped,
-        "total_chunks": len(documents),
+        "total_chunks": total_chunks,
         "duration_sec": round(duration, 3),
     }
+    if job_id:
+        passports_jobs[job_id].update(
+            {
+                "status": "completed",
+                "progress": 100,
+                "indexed_chunks": indexed,
+                "total_chunks": total_chunks,
+                "duration_sec": round(duration, 3),
+            }
+        )
+    return result
 
 
 @app.post("/upload_passports")
@@ -233,12 +271,74 @@ async def upload_passports(
         raise HTTPException(status_code=400, detail="Maximum 30 files per upload")
 
     create_collection(collection_name)
+    file_entries = []
+    for file in files:
+        contents = await file.read()
+        file_entries.append((file.filename, contents))
     return await process_passports_upload(
-        files=files,
+        file_entries=file_entries,
         collection_name=collection_name,
         batch_size=batch_size,
         points_batch_size=points_batch_size,
     )
+
+
+async def run_passports_job(
+    *,
+    job_id: str,
+    file_entries: List[tuple],
+    collection_name: str,
+    batch_size: int,
+    points_batch_size: int,
+):
+    try:
+        await process_passports_upload(
+            file_entries=file_entries,
+            collection_name=collection_name,
+            batch_size=batch_size,
+            points_batch_size=points_batch_size,
+            job_id=job_id,
+        )
+    except Exception as exc:
+        logger.error("Passport upload job failed: %s", exc, exc_info=True)
+        passports_jobs[job_id].update({"status": "failed", "error": str(exc)})
+
+
+@app.post("/upload_passports_async")
+async def upload_passports_async(
+    files: List[UploadFile] = File(...),
+    collection_name: str = Form(...),
+    batch_size: int = Form(8),
+    points_batch_size: int = Form(200),
+):
+    if len(files) > 30:
+        raise HTTPException(status_code=400, detail="Maximum 30 files per upload")
+
+    create_collection(collection_name)
+    file_entries = []
+    for file in files:
+        contents = await file.read()
+        file_entries.append((file.filename, contents))
+
+    job_id = str(uuid.uuid4())
+    passports_jobs[job_id] = {"status": "queued", "progress": 0}
+    asyncio.create_task(
+        run_passports_job(
+            job_id=job_id,
+            file_entries=file_entries,
+            collection_name=collection_name,
+            batch_size=batch_size,
+            points_batch_size=points_batch_size,
+        )
+    )
+    return {"status": "started", "job_id": job_id}
+
+
+@app.get("/passports_status/{job_id}")
+async def passports_status(job_id: str):
+    if job_id not in passports_jobs:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return passports_jobs[job_id]
 
 
 @app.get("/search_passports")
