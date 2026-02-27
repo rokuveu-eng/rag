@@ -355,7 +355,56 @@ async def search_passports(
     )
 
     try:
-        points = qdrant_client.query_points(
+        stage1_points = qdrant_client.query_points(
+            collection_name=collection_name,
+            prefetch=[
+                models.Prefetch(
+                    query=sparse_vector,
+                    using="text-sparse",
+                    limit=20,
+                ),
+                models.Prefetch(
+                    query=dense_vector,
+                    using="text-dense",
+                    limit=20,
+                ),
+            ],
+            query=models.FusionQuery(fusion=models.Fusion.RRF),
+            limit=20,
+            with_payload=True,
+        ).points
+
+        pdf_counts = {}
+        for point in stage1_points:
+            payload = point.payload or {}
+            pdf_name = payload.get("pdf_name")
+            if not pdf_name:
+                continue
+            pdf_counts[pdf_name] = pdf_counts.get(pdf_name, 0) + 1
+
+        selected_pdf = max(pdf_counts, key=pdf_counts.get) if pdf_counts else None
+        if not selected_pdf:
+            return {
+                "results": [],
+                "selected_pdf": None,
+                "debug": {
+                    "dense_dim": len(dense_vector),
+                    "sparse_nonzero": len(sparse_vector.indices),
+                    "stage1_hits": len(stage1_points),
+                    "stage1_pdf_counts": pdf_counts,
+                },
+            }
+
+        pdf_filter = models.Filter(
+            must=[
+                models.FieldCondition(
+                    key="pdf_name",
+                    match=models.MatchValue(value=selected_pdf),
+                )
+            ]
+        )
+
+        stage2_points = qdrant_client.query_points(
             collection_name=collection_name,
             prefetch=[
                 models.Prefetch(
@@ -372,13 +421,17 @@ async def search_passports(
             query=models.FusionQuery(fusion=models.Fusion.RRF),
             limit=limit,
             with_payload=True,
+            query_filter=pdf_filter,
         ).points
 
         return {
-            "results": points,
+            "results": stage2_points,
+            "selected_pdf": selected_pdf,
             "debug": {
                 "dense_dim": len(dense_vector),
                 "sparse_nonzero": len(sparse_vector.indices),
+                "stage1_hits": len(stage1_points),
+                "stage1_pdf_counts": pdf_counts,
             },
         }
     except Exception as exc:
