@@ -34,6 +34,10 @@ const hfHubCachePath = document.getElementById('hf-hub-cache-path');
 const hfCacheSize = document.getElementById('hf-cache-size');
 const hfCacheFiles = document.getElementById('hf-cache-files');
 
+const mainSearchButton = document.getElementById('main-search-button');
+const mainSearchStatus = document.getElementById('main-search-status');
+const mainSearchOutput = document.getElementById('main-search-output');
+
 const setStatus = (message) => {
     statusText.textContent = `Статус: ${message}`;
 };
@@ -111,6 +115,20 @@ const setHfCacheStatus = (message) => {
         return;
     }
     hfCacheStatus.textContent = `Статус: ${message}`;
+};
+
+const setMainSearchStatus = (message) => {
+    if (!mainSearchStatus) {
+        return;
+    }
+    mainSearchStatus.textContent = `Статус: ${message}`;
+};
+
+const setMainSearchOutput = (message) => {
+    if (!mainSearchOutput) {
+        return;
+    }
+    mainSearchOutput.textContent = message;
 };
 
 const addHfCacheLog = (message) => {
@@ -807,6 +825,80 @@ if (passportsSearchButton) {
             alert(error.message);
         } finally {
             passportsSearchButton.disabled = false;
+        }
+    });
+}
+
+if (mainSearchButton) {
+    mainSearchButton.addEventListener('click', async () => {
+        const collectionName = document.getElementById('collection-name').value;
+        const query = document.getElementById('main-search-query').value.trim();
+        const mode = document.getElementById('main-search-mode').value;
+        const onlyInStock = document.getElementById('main-search-in-stock').value === 'true';
+
+        if (!query) {
+            alert('Введите поисковый запрос.');
+            return;
+        }
+
+        setMainSearchStatus('поиск...');
+        setMainSearchOutput('');
+        mainSearchButton.disabled = true;
+
+        try {
+            const response = await fetch(
+                `/search?collection_name=${encodeURIComponent(collectionName)}` +
+                `&query=${encodeURIComponent(query)}` +
+                `&mode=${encodeURIComponent(mode)}` +
+                `&only_in_stock=${onlyInStock}`
+            );
+
+            if (!response.ok) {
+                const payload = await response.json().catch(() => ({}));
+                throw new Error(payload.detail || 'Ошибка поиска.');
+            }
+
+            const payload = await response.json();
+            const results = payload.results || [];
+            const debug = payload.debug || {};
+
+            if (!results.length) {
+                setMainSearchStatus('ничего не найдено');
+                setMainSearchOutput(
+                    `Результаты не найдены.\n` +
+                    `mode: ${debug.mode || mode}\n` +
+                    `dense_dim: ${debug.dense_dim ?? 'n/a'}\n` +
+                    `sparse_nonzero: ${debug.sparse_nonzero ?? 'n/a'}`
+                );
+                return;
+            }
+
+            const formattedResults = results.map((item, index) => {
+                const payloadData = item.payload || {};
+                const score = item.score ?? 'n/a';
+                return [
+                    `#${index + 1} score: ${score}`,
+                    `payload: ${JSON.stringify(payloadData, null, 2)}`,
+                    ''
+                ].join('\n');
+            }).join('\n');
+
+            const formattedSummary = [
+                `mode: ${debug.mode || mode}`,
+                `dense_dim: ${debug.dense_dim ?? 'n/a'}`,
+                `sparse_nonzero: ${debug.sparse_nonzero ?? 'n/a'}`,
+                '',
+                formattedResults,
+            ].join('\n');
+
+            setMainSearchStatus('готово');
+            setMainSearchOutput(formattedSummary);
+        } catch (error) {
+            setMainSearchStatus('ошибка поиска');
+            setMainSearchOutput(`Ошибка: ${error.message}`);
+            alert(error.message);
+        } finally {
+            mainSearchButton.disabled = false;
         }
     });
 }

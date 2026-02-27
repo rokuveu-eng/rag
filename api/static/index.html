@@ -224,6 +224,34 @@
                 <div id="column-mappings" class="mappings"></div>
                 <button id="upload-data" style="display:none;">Загрузить данные</button>
             </div>
+
+            <div class="section">
+                <h2>Поиск (основная коллекция)</h2>
+                <div class="grid">
+                    <div>
+                        <label for="main-search-query">Запрос</label>
+                        <input type="text" id="main-search-query" placeholder="Введите запрос">
+                    </div>
+                    <div>
+                        <label for="main-search-mode">Режим</label>
+                        <select id="main-search-mode">
+                            <option value="hybrid" selected>Hybrid</option>
+                            <option value="dense">Dense</option>
+                            <option value="sparse">Sparse</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label for="main-search-in-stock">Только в наличии</label>
+                        <select id="main-search-in-stock">
+                            <option value="false" selected>Нет</option>
+                            <option value="true">Да</option>
+                        </select>
+                    </div>
+                </div>
+                <button id="main-search-button" style="margin-top: 12px;">Искать</button>
+                <div class="status" id="main-search-status">Статус: ожидание запроса.</div>
+                <div class="log-output" id="main-search-output">Результаты появятся здесь.</div>
+            </div>
         </div>
 
         <div class="tab-content" id="tab-stock">
