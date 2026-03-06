@@ -236,9 +236,14 @@ http://localhost:8424
 
 ---
 
-## 🤖 Интеграции: Polza.ai + Bitrix24
+## 🤖 Интеграции: Polza.ai + Bitrix24 (OAuth + webhook)
 
-Ветка `feature/bitrix24-chatbot` добавляет чат-бот сценарий:
+Чат-бот сценарий поддерживает два режима вызова Bitrix REST:
+
+1. **Входящий webhook URL** (быстрый старт).
+2. **OAuth-приложение Bitrix24** (рекомендуется для production).
+
+Сценарий работы:
 
 1. Бот получает команду `/price <запрос>` из Bitrix24.
 2. Backend выполняет поиск по коллекции (`hybrid` / `dense` / `sparse`).
@@ -246,9 +251,11 @@ http://localhost:8424
 4. Контекст отправляется в Polza Chat Completions.
 5. Готовый ответ + найденные позиции отправляются обратно в Bitrix24.
 
-Также поддерживаются команды:
+Поддерживаемые команды:
 - `/help` — список команд;
+- `/search <запрос>` — поиск по коллекции документации + LLM;
 - `/newchat` и `/clear` — очистка контекста диалога.
+- `/stock <запрос>` — поиск только позиций в наличии.
 
 Контекст сообщений хранится в памяти backend (по `dialog_id`), без записи в БД.
 
@@ -266,6 +273,16 @@ http://localhost:8424
 Возвращает текущую конфигурацию интеграций в безопасном виде:
 - `polza.configured`, `polza.api_key_masked`, `model`, `base_url`, `temperature`, `max_tokens`;
 - `bitrix.client_id`, `client_secret_masked`, `redirect_uri`, `webhook_url`, `bot_id`, `collection_name`, `search_mode`.
+
+Дополнительно для OAuth:
+- `bitrix.portal_base_url`
+- `bitrix.oauth_auth_url`
+- `bitrix.oauth_token_url`
+- `bitrix.oauth_connected`
+- `bitrix.access_token_masked`
+- `bitrix.refresh_token_masked`
+- `bitrix.token_expires_at`
+- `bitrix.docs_collection_name` (для команды `/search`)
 
 Пример:
 
@@ -304,6 +321,18 @@ curl -X POST http://localhost:8424/runtime_config \
 
 > `bitrix.search_mode` должен быть одним из: `hybrid`, `dense`, `sparse`.
 
+### OAuth-эндпоинты Bitrix24
+
+- `GET /bitrix/oauth/connect_url` — получить ссылку авторизации (client_id + redirect_uri + state).
+- `GET /bitrix/oauth/callback` — callback для обмена `code` на `access/refresh token`.
+- `POST /bitrix/oauth/refresh` — принудительное обновление access token.
+- `GET /bitrix/oauth/status` — проверить состояние OAuth-подключения.
+
+В UI (вкладка **Интеграции**) добавлены кнопки:
+- «Подключить Bitrix24 (OAuth)»
+- «Обновить OAuth токен»
+- «Проверить OAuth статус»
+
 ---
 
 ## 🧠 Bitrix24 webhook API
@@ -317,6 +346,8 @@ POST /bitrix/webhook
 Поддерживаемые команды:
 - `/help`
 - `/price <запрос>`
+- `/search <запрос>`
+- `/stock <запрос>`
 - `/newchat`
 - `/clear`
 

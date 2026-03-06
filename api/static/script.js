@@ -40,6 +40,9 @@ const mainSearchOutput = document.getElementById('main-search-output');
 
 const integrationsRefreshButton = document.getElementById('integrations-refresh');
 const integrationsSaveButton = document.getElementById('integrations-save');
+const bitrixOauthConnectButton = document.getElementById('bitrix-oauth-connect');
+const bitrixOauthRefreshButton = document.getElementById('bitrix-oauth-refresh');
+const bitrixOauthStatusButton = document.getElementById('bitrix-oauth-status');
 const integrationsStatus = document.getElementById('integrations-status');
 const integrationsLog = document.getElementById('integrations-log');
 
@@ -165,8 +168,12 @@ const renderRuntimeConfig = (payload) => {
     const bitrixClientSecretMasked = document.getElementById('bitrix-client-secret-masked');
     const bitrixRedirectUri = document.getElementById('bitrix-redirect-uri');
     const bitrixWebhookUrl = document.getElementById('bitrix-webhook-url');
+    const bitrixPortalBaseUrl = document.getElementById('bitrix-portal-base-url');
+    const bitrixOauthAuthUrl = document.getElementById('bitrix-oauth-auth-url');
+    const bitrixOauthTokenUrl = document.getElementById('bitrix-oauth-token-url');
     const bitrixBotId = document.getElementById('bitrix-bot-id');
     const bitrixCollectionName = document.getElementById('bitrix-collection-name');
+    const bitrixDocsCollectionName = document.getElementById('bitrix-docs-collection-name');
     const bitrixSearchMode = document.getElementById('bitrix-search-mode');
 
     if (polzaApiKeyMasked) polzaApiKeyMasked.value = polza.api_key_masked || '';
@@ -179,9 +186,19 @@ const renderRuntimeConfig = (payload) => {
     if (bitrixClientSecretMasked) bitrixClientSecretMasked.value = bitrix.client_secret_masked || '';
     if (bitrixRedirectUri) bitrixRedirectUri.value = bitrix.redirect_uri || '';
     if (bitrixWebhookUrl) bitrixWebhookUrl.value = bitrix.webhook_url || '';
+    if (bitrixPortalBaseUrl) bitrixPortalBaseUrl.value = bitrix.portal_base_url || '';
+    if (bitrixOauthAuthUrl) bitrixOauthAuthUrl.value = bitrix.oauth_auth_url || 'https://oauth.bitrix.info/oauth/authorize/';
+    if (bitrixOauthTokenUrl) bitrixOauthTokenUrl.value = bitrix.oauth_token_url || 'https://oauth.bitrix.info/oauth/token/';
     if (bitrixBotId) bitrixBotId.value = bitrix.bot_id || '';
     if (bitrixCollectionName) bitrixCollectionName.value = bitrix.collection_name || 'my_collection';
+    if (bitrixDocsCollectionName) bitrixDocsCollectionName.value = bitrix.docs_collection_name || 'passports_collection';
     if (bitrixSearchMode) bitrixSearchMode.value = bitrix.search_mode || 'hybrid';
+
+    if (bitrix.oauth_connected) {
+        addIntegrationsLog(
+            `OAuth подключен. portal=${bitrix.portal_base_url || 'n/a'}, token=${bitrix.access_token_masked || '***'}`
+        );
+    }
 };
 
 const loadRuntimeConfig = async () => {
@@ -1054,8 +1071,12 @@ if (integrationsSaveButton) {
         const bitrixClientSecret = document.getElementById('bitrix-client-secret')?.value || '';
         const bitrixRedirectUri = document.getElementById('bitrix-redirect-uri')?.value || '';
         const bitrixWebhookUrl = document.getElementById('bitrix-webhook-url')?.value || '';
+        const bitrixPortalBaseUrl = document.getElementById('bitrix-portal-base-url')?.value || '';
+        const bitrixOauthAuthUrl = document.getElementById('bitrix-oauth-auth-url')?.value || 'https://oauth.bitrix.info/oauth/authorize/';
+        const bitrixOauthTokenUrl = document.getElementById('bitrix-oauth-token-url')?.value || 'https://oauth.bitrix.info/oauth/token/';
         const bitrixBotId = document.getElementById('bitrix-bot-id')?.value || '';
         const bitrixCollectionName = document.getElementById('bitrix-collection-name')?.value || 'my_collection';
+        const bitrixDocsCollectionName = document.getElementById('bitrix-docs-collection-name')?.value || 'passports_collection';
         const bitrixSearchMode = document.getElementById('bitrix-search-mode')?.value || 'hybrid';
 
         const polzaPayload = {
@@ -1072,8 +1093,12 @@ if (integrationsSaveButton) {
             client_id: bitrixClientId,
             redirect_uri: bitrixRedirectUri,
             webhook_url: bitrixWebhookUrl,
+            portal_base_url: bitrixPortalBaseUrl,
+            oauth_auth_url: bitrixOauthAuthUrl,
+            oauth_token_url: bitrixOauthTokenUrl,
             bot_id: bitrixBotId,
             collection_name: bitrixCollectionName,
+            docs_collection_name: bitrixDocsCollectionName,
             search_mode: bitrixSearchMode,
         };
         if (bitrixClientSecret.trim()) {
@@ -1115,6 +1140,79 @@ if (integrationsSaveButton) {
             alert(error.message);
         } finally {
             integrationsSaveButton.disabled = false;
+        }
+    });
+}
+
+if (bitrixOauthConnectButton) {
+    bitrixOauthConnectButton.addEventListener('click', async () => {
+        bitrixOauthConnectButton.disabled = true;
+        setIntegrationsStatus('получение OAuth URL...');
+        try {
+            const response = await fetch('/bitrix/oauth/connect_url');
+            if (!response.ok) {
+                const payload = await response.json().catch(() => ({}));
+                throw new Error(payload.detail || 'Не удалось получить OAuth URL');
+            }
+            const payload = await response.json();
+            const connectUrl = payload.connect_url;
+            addIntegrationsLog(`OAuth URL получен. state=${payload.state}`);
+            setIntegrationsStatus('откройте окно OAuth и завершите авторизацию');
+            window.open(connectUrl, '_blank', 'noopener,noreferrer');
+        } catch (error) {
+            setIntegrationsStatus('ошибка OAuth');
+            addIntegrationsLog(`Ошибка: ${error.message}`);
+            alert(error.message);
+        } finally {
+            bitrixOauthConnectButton.disabled = false;
+        }
+    });
+}
+
+if (bitrixOauthRefreshButton) {
+    bitrixOauthRefreshButton.addEventListener('click', async () => {
+        bitrixOauthRefreshButton.disabled = true;
+        setIntegrationsStatus('обновление OAuth токена...');
+        try {
+            const response = await fetch('/bitrix/oauth/refresh', { method: 'POST' });
+            if (!response.ok) {
+                const payload = await response.json().catch(() => ({}));
+                throw new Error(payload.detail || 'Не удалось обновить токен');
+            }
+            const payload = await response.json();
+            addIntegrationsLog(`OAuth токен обновлен. expires_at=${payload.expires_at}`);
+            setIntegrationsStatus('OAuth токен обновлён');
+        } catch (error) {
+            setIntegrationsStatus('ошибка OAuth refresh');
+            addIntegrationsLog(`Ошибка: ${error.message}`);
+            alert(error.message);
+        } finally {
+            bitrixOauthRefreshButton.disabled = false;
+        }
+    });
+}
+
+if (bitrixOauthStatusButton) {
+    bitrixOauthStatusButton.addEventListener('click', async () => {
+        bitrixOauthStatusButton.disabled = true;
+        setIntegrationsStatus('проверка OAuth статуса...');
+        try {
+            const response = await fetch('/bitrix/oauth/status');
+            if (!response.ok) {
+                const payload = await response.json().catch(() => ({}));
+                throw new Error(payload.detail || 'Не удалось получить OAuth статус');
+            }
+            const payload = await response.json();
+            addIntegrationsLog(
+                `OAuth status: connected=${payload.connected}, portal=${payload.portal_base_url || 'n/a'}, expires_in=${payload.expires_in || 0}s`
+            );
+            setIntegrationsStatus(payload.connected ? 'OAuth подключен' : 'OAuth не подключен');
+        } catch (error) {
+            setIntegrationsStatus('ошибка OAuth status');
+            addIntegrationsLog(`Ошибка: ${error.message}`);
+            alert(error.message);
+        } finally {
+            bitrixOauthStatusButton.disabled = false;
         }
     });
 }

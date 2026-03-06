@@ -23,6 +23,8 @@ from time import perf_counter
 from typing import Optional, List, Dict, Any
 import uuid
 import shutil
+import time
+from urllib.parse import urlencode
 from pdf2image import convert_from_bytes
 import pytesseract
 
@@ -59,6 +61,7 @@ stock_jobs = {}
 passports_jobs = {}
 chat_sessions: Dict[str, List[Dict[str, str]]] = {}
 hf_home = os.getenv("HF_HOME", os.path.expanduser("~/.cache/huggingface"))
+bitrix_oauth_states: Dict[str, float] = {}
 
 runtime_config: Dict[str, Dict[str, Any]] = {
     "polza": {
@@ -73,8 +76,15 @@ runtime_config: Dict[str, Dict[str, Any]] = {
         "client_secret": "",
         "redirect_uri": "",
         "webhook_url": "",
+        "portal_base_url": "",
+        "oauth_auth_url": "https://oauth.bitrix.info/oauth/authorize/",
+        "oauth_token_url": "https://oauth.bitrix.info/oauth/token/",
+        "access_token": "",
+        "refresh_token": "",
+        "token_expires_at": 0,
         "bot_id": "",
         "collection_name": "my_collection",
+        "docs_collection_name": "passports_collection",
         "search_mode": "hybrid",
     },
 }
@@ -119,8 +129,16 @@ def runtime_config_response() -> Dict[str, Any]:
             "client_secret_masked": mask_secret(bitrix.get("client_secret", "")),
             "redirect_uri": bitrix.get("redirect_uri", ""),
             "webhook_url": bitrix.get("webhook_url", ""),
+            "portal_base_url": bitrix.get("portal_base_url", ""),
+            "oauth_auth_url": bitrix.get("oauth_auth_url", "https://oauth.bitrix.info/oauth/authorize/"),
+            "oauth_token_url": bitrix.get("oauth_token_url", "https://oauth.bitrix.info/oauth/token/"),
+            "oauth_connected": bool(bitrix.get("access_token")),
+            "access_token_masked": mask_secret(bitrix.get("access_token", "")),
+            "refresh_token_masked": mask_secret(bitrix.get("refresh_token", "")),
+            "token_expires_at": bitrix.get("token_expires_at", 0),
             "bot_id": bitrix.get("bot_id", ""),
             "collection_name": bitrix.get("collection_name", "my_collection"),
+            "docs_collection_name": bitrix.get("docs_collection_name", "passports_collection"),
             "search_mode": bitrix.get("search_mode", "hybrid"),
         },
     }
@@ -165,12 +183,21 @@ async def set_runtime_config(payload: Dict[str, Any] = Body(...)):
         "client_secret",
         "redirect_uri",
         "webhook_url",
+        "portal_base_url",
+        "oauth_auth_url",
+        "oauth_token_url",
         "bot_id",
         "collection_name",
+        "docs_collection_name",
         "search_mode",
     ]:
         if key in bitrix_updates:
             bitrix[key] = str(bitrix_updates.get(key) or "").strip()
+
+    if bool(bitrix_updates.get("clear_oauth")):
+        bitrix["access_token"] = ""
+        bitrix["refresh_token"] = ""
+        bitrix["token_expires_at"] = 0
 
     mode = bitrix.get("search_mode", "hybrid").lower().strip()
     if mode not in {"hybrid", "dense", "sparse"}:
@@ -178,6 +205,210 @@ async def set_runtime_config(payload: Dict[str, Any] = Body(...)):
     bitrix["search_mode"] = mode
 
     return {"status": "updated", "config": runtime_config_response()}
+
+
+def bitrix_rest_base_url() -> str:
+    bitrix = runtime_config["bitrix"]
+    portal_base_url = (bitrix.get("portal_base_url") or "").strip().rstrip("/")
+    if not portal_base_url:
+        return ""
+    return f"{portal_base_url}/rest"
+
+
+async def refresh_bitrix_access_token() -> bool:
+    bitrix = runtime_config["bitrix"]
+    refresh_token = (bitrix.get("refresh_token") or "").strip()
+    client_id = (bitrix.get("client_id") or "").strip()
+    client_secret = (bitrix.get("client_secret") or "").strip()
+    token_url = (bitrix.get("oauth_token_url") or "https://oauth.bitrix.info/oauth/token/").strip()
+
+    if not refresh_token or not client_id or not client_secret:
+        return False
+
+    payload = {
+        "grant_type": "refresh_token",
+        "client_id": client_id,
+        "client_secret": client_secret,
+        "refresh_token": refresh_token,
+    }
+
+    async with httpx.AsyncClient(timeout=20.0) as client:
+        response = await client.post(token_url, data=payload)
+        response.raise_for_status()
+        data = response.json()
+
+    access_token = str(data.get("access_token") or "").strip()
+    new_refresh_token = str(data.get("refresh_token") or refresh_token).strip()
+    expires_in = int(data.get("expires_in") or 3600)
+    domain = str(data.get("domain") or "").strip()
+
+    if not access_token:
+        return False
+
+    bitrix["access_token"] = access_token
+    bitrix["refresh_token"] = new_refresh_token
+    bitrix["token_expires_at"] = int(time.time()) + max(60, expires_in - 30)
+    if domain:
+        bitrix["portal_base_url"] = f"https://{domain}"
+    return True
+
+
+async def ensure_bitrix_access_token() -> bool:
+    bitrix = runtime_config["bitrix"]
+    token = (bitrix.get("access_token") or "").strip()
+    expires_at = int(bitrix.get("token_expires_at") or 0)
+    now = int(time.time())
+
+    if token and expires_at > now + 30:
+        return True
+
+    try:
+        return await refresh_bitrix_access_token()
+    except Exception as exc:
+        logger.error("Bitrix token refresh failed: %s", exc, exc_info=True)
+        return False
+
+
+async def bitrix_api_call(method: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+    bitrix = runtime_config["bitrix"]
+    webhook_url = (bitrix.get("webhook_url") or "").strip().rstrip("/")
+
+    if webhook_url:
+        method_url = f"{webhook_url}/{method}.json"
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            response = await client.post(method_url, data=payload)
+            response.raise_for_status()
+            return response.json() if response.content else {"result": True}
+
+    if not await ensure_bitrix_access_token():
+        raise HTTPException(status_code=400, detail="Bitrix OAuth не подключён или токен недействителен")
+
+    base_url = bitrix_rest_base_url()
+    if not base_url:
+        raise HTTPException(status_code=400, detail="Не задан bitrix.portal_base_url")
+
+    method_url = f"{base_url}/{method}.json"
+    oauth_payload = dict(payload)
+    oauth_payload["auth"] = bitrix.get("access_token", "")
+
+    async with httpx.AsyncClient(timeout=20.0) as client:
+        response = await client.post(method_url, data=oauth_payload)
+        if response.status_code == 401:
+            refreshed = await refresh_bitrix_access_token()
+            if not refreshed:
+                raise HTTPException(status_code=401, detail="Не удалось обновить Bitrix OAuth токен")
+            oauth_payload["auth"] = bitrix.get("access_token", "")
+            response = await client.post(method_url, data=oauth_payload)
+        response.raise_for_status()
+        data = response.json() if response.content else {"result": True}
+
+    if isinstance(data, dict) and data.get("error"):
+        err = data.get("error_description") or data.get("error")
+        raise HTTPException(status_code=400, detail=f"Bitrix API error: {err}")
+
+    return data
+
+
+@app.get("/bitrix/oauth/connect_url")
+async def bitrix_oauth_connect_url():
+    bitrix = runtime_config["bitrix"]
+    client_id = (bitrix.get("client_id") or "").strip()
+    redirect_uri = (bitrix.get("redirect_uri") or "").strip()
+    auth_url = (bitrix.get("oauth_auth_url") or "https://oauth.bitrix.info/oauth/authorize/").strip()
+
+    if not client_id or not redirect_uri:
+        raise HTTPException(status_code=400, detail="Укажите bitrix.client_id и bitrix.redirect_uri")
+
+    state = str(uuid.uuid4())
+    bitrix_oauth_states[state] = time.time()
+    query = urlencode(
+        {
+            "client_id": client_id,
+            "response_type": "code",
+            "redirect_uri": redirect_uri,
+            "state": state,
+        }
+    )
+    return {"connect_url": f"{auth_url}?{query}", "state": state}
+
+
+@app.get("/bitrix/oauth/callback")
+async def bitrix_oauth_callback(
+    code: str = Query(...),
+    state: str = Query(...),
+    domain: Optional[str] = Query(None),
+):
+    state_created_at = bitrix_oauth_states.pop(state, None)
+    if not state_created_at or (time.time() - state_created_at) > 900:
+        raise HTTPException(status_code=400, detail="Недействительный OAuth state")
+
+    bitrix = runtime_config["bitrix"]
+    client_id = (bitrix.get("client_id") or "").strip()
+    client_secret = (bitrix.get("client_secret") or "").strip()
+    redirect_uri = (bitrix.get("redirect_uri") or "").strip()
+    token_url = (bitrix.get("oauth_token_url") or "https://oauth.bitrix.info/oauth/token/").strip()
+
+    if not client_id or not client_secret or not redirect_uri:
+        raise HTTPException(status_code=400, detail="Заполните bitrix client_id/client_secret/redirect_uri")
+
+    payload = {
+        "grant_type": "authorization_code",
+        "client_id": client_id,
+        "client_secret": client_secret,
+        "code": code,
+        "redirect_uri": redirect_uri,
+    }
+
+    async with httpx.AsyncClient(timeout=20.0) as client:
+        response = await client.post(token_url, data=payload)
+        response.raise_for_status()
+        data = response.json()
+
+    access_token = str(data.get("access_token") or "").strip()
+    refresh_token = str(data.get("refresh_token") or "").strip()
+    expires_in = int(data.get("expires_in") or 3600)
+    oauth_domain = str(data.get("domain") or domain or "").strip()
+
+    if not access_token:
+        raise HTTPException(status_code=400, detail="Bitrix OAuth не вернул access_token")
+
+    bitrix["access_token"] = access_token
+    bitrix["refresh_token"] = refresh_token
+    bitrix["token_expires_at"] = int(time.time()) + max(60, expires_in - 30)
+    if oauth_domain:
+        bitrix["portal_base_url"] = f"https://{oauth_domain}"
+
+    return {
+        "status": "connected",
+        "portal_base_url": bitrix.get("portal_base_url", ""),
+        "expires_at": bitrix.get("token_expires_at", 0),
+    }
+
+
+@app.post("/bitrix/oauth/refresh")
+async def bitrix_oauth_refresh():
+    refreshed = await refresh_bitrix_access_token()
+    if not refreshed:
+        raise HTTPException(status_code=400, detail="Не удалось обновить OAuth токен")
+    return {
+        "status": "refreshed",
+        "expires_at": runtime_config["bitrix"].get("token_expires_at", 0),
+    }
+
+
+@app.get("/bitrix/oauth/status")
+async def bitrix_oauth_status():
+    bitrix = runtime_config["bitrix"]
+    now = int(time.time())
+    expires_at = int(bitrix.get("token_expires_at") or 0)
+    return {
+        "connected": bool((bitrix.get("access_token") or "").strip()),
+        "portal_base_url": bitrix.get("portal_base_url", ""),
+        "expires_at": expires_at,
+        "expires_in": max(0, expires_at - now),
+        "access_token_masked": mask_secret(bitrix.get("access_token", "")),
+        "refresh_token_masked": mask_secret(bitrix.get("refresh_token", "")),
+    }
 
 def safe_upsert(collection_name: str, points: list):
     try:
@@ -1383,15 +1614,23 @@ async def polza_chat_completion(dialog_id: str, user_query: str, context: str) -
         return "LLM не настроена: укажите Polza API key в веб-интерфейсе."
 
     history = chat_sessions.setdefault(dialog_id, [])
-    messages = [
-        {
-            "role": "system",
-            "content": (
-                "Ты помощник по прайс-листу. Отвечай кратко и по фактам. "
-                "Если данных недостаточно — честно сообщи об этом."
-            ),
-        }
-    ]
+    system_prompt = (
+        "Ты помощник по прайс-листу. Отвечай кратко и по фактам. "
+        "Если данных недостаточно — честно сообщи об этом."
+    )
+
+    if user_query.startswith("[docs]"):
+        system_prompt = (
+            "Ты помощник по внутренней документации. Отвечай только на основе найденного контекста. "
+            "Если данных в контексте недостаточно — так и напиши."
+        )
+    elif user_query.startswith("[stock]"):
+        system_prompt = (
+            "Ты помощник по остаткам. Отвечай кратко, с акцентом на наличие и артикулы. "
+            "Не придумывай данные, используй только контекст."
+        )
+
+    messages = [{"role": "system", "content": system_prompt}]
     messages.extend(history[-10:])
     messages.append(
         {
@@ -1475,13 +1714,7 @@ def extract_bitrix_message(payload: Dict[str, Any]) -> Dict[str, str]:
 
 
 async def send_bitrix_message(dialog_id: str, message: str):
-    webhook_url = runtime_config["bitrix"].get("webhook_url", "").strip()
-    if not webhook_url:
-        logger.warning("Bitrix webhook_url is not configured. Skip outbound message.")
-        return
-
-    method_url = webhook_url.rstrip("/") + "/imbot.message.add.json"
-    payload = {
+    payload: Dict[str, Any] = {
         "DIALOG_ID": dialog_id,
         "MESSAGE": message,
     }
@@ -1490,11 +1723,20 @@ async def send_bitrix_message(dialog_id: str, message: str):
         payload["BOT_ID"] = bot_id
 
     try:
-        async with httpx.AsyncClient(timeout=20.0) as client:
-            response = await client.post(method_url, data=payload)
-            response.raise_for_status()
+        await bitrix_api_call("imbot.message.add", payload)
     except Exception as exc:
         logger.error("Failed to send Bitrix message: %s", exc, exc_info=True)
+
+
+def build_docs_context(results: List[Any], limit: int = 5) -> str:
+    lines = []
+    for idx, point in enumerate(results[:limit], start=1):
+        payload = point.payload or {}
+        source = payload.get("pdf_name") or payload.get("source") or "doc"
+        text = str(payload.get("text") or "").strip()
+        preview = (text[:300] + "...") if len(text) > 300 else text
+        lines.append(f"{idx}. Источник: {source}; Фрагмент: {preview}")
+    return "\n".join(lines)
 
 
 @app.post("/bitrix/webhook")
@@ -1513,7 +1755,9 @@ async def bitrix_webhook(payload: Dict[str, Any] = Body(default={})):  # noqa: B
         response_text = (
             "Команды бота:\n"
             "/help — помощь\n"
+            "/search <запрос> — поиск по документации + LLM\n"
             "/price <запрос> — поиск по прайс-листу + LLM\n"
+            "/stock <запрос> — поиск только в наличии\n"
             "/newchat — очистить контекст диалога\n"
             "/clear — очистить контекст диалога"
         )
@@ -1558,6 +1802,76 @@ async def bitrix_webhook(payload: Dict[str, Any] = Body(default={})):  # noqa: B
         except Exception as exc:
             logger.error("/price processing failed: %s", exc, exc_info=True)
             response_text = f"Ошибка обработки /price: {exc}"
+            await send_bitrix_message(dialog_id, response_text)
+            return {"status": "error", "reply": response_text}
+
+    if lower.startswith("/search"):
+        query_text = normalized[7:].strip()
+        if not query_text:
+            response_text = "Укажи запрос после команды: /search <что ищем в документации>"
+            await send_bitrix_message(dialog_id, response_text)
+            return {"status": "ok", "reply": response_text}
+
+        bitrix_cfg = runtime_config["bitrix"]
+        docs_collection_name = bitrix_cfg.get("docs_collection_name", "passports_collection") or "passports_collection"
+        mode = bitrix_cfg.get("search_mode", "hybrid") or "hybrid"
+
+        try:
+            search_payload = await run_catalog_search(
+                query=query_text,
+                collection_name=docs_collection_name,
+                only_in_stock=False,
+                mode=mode,
+            )
+            results = search_payload.get("results", [])
+            if not results:
+                response_text = "По документации ничего не найдено."
+                await send_bitrix_message(dialog_id, response_text)
+                return {"status": "ok", "reply": response_text}
+
+            context = build_docs_context(results, limit=5)
+            llm_answer = await polza_chat_completion(dialog_id, f"[docs] {query_text}", context)
+            response_text = f"{llm_answer}\n\nИсточники:\n{context}"
+            await send_bitrix_message(dialog_id, response_text[:3800])
+            return {"status": "ok", "reply": response_text}
+        except Exception as exc:
+            logger.error("/search processing failed: %s", exc, exc_info=True)
+            response_text = f"Ошибка обработки /search: {exc}"
+            await send_bitrix_message(dialog_id, response_text)
+            return {"status": "error", "reply": response_text}
+
+    if lower.startswith("/stock"):
+        query_text = normalized[6:].strip()
+        if not query_text:
+            response_text = "Укажи запрос после команды: /stock <артикул или наименование>"
+            await send_bitrix_message(dialog_id, response_text)
+            return {"status": "ok", "reply": response_text}
+
+        bitrix_cfg = runtime_config["bitrix"]
+        collection_name = bitrix_cfg.get("collection_name", "my_collection") or "my_collection"
+        mode = bitrix_cfg.get("search_mode", "hybrid") or "hybrid"
+
+        try:
+            search_payload = await run_catalog_search(
+                query=query_text,
+                collection_name=collection_name,
+                only_in_stock=True,
+                mode=mode,
+            )
+            results = search_payload.get("results", [])
+            if not results:
+                response_text = "По наличию ничего не найдено."
+                await send_bitrix_message(dialog_id, response_text)
+                return {"status": "ok", "reply": response_text}
+
+            context = build_context_from_results(results, limit=5)
+            llm_answer = await polza_chat_completion(dialog_id, f"[stock] {query_text}", context)
+            response_text = f"{llm_answer}\n\nВ наличии:\n{context}"
+            await send_bitrix_message(dialog_id, response_text[:3800])
+            return {"status": "ok", "reply": response_text}
+        except Exception as exc:
+            logger.error("/stock processing failed: %s", exc, exc_info=True)
+            response_text = f"Ошибка обработки /stock: {exc}"
             await send_bitrix_message(dialog_id, response_text)
             return {"status": "error", "reply": response_text}
 

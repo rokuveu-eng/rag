@@ -448,12 +448,29 @@
                         <div class="hint">Используется для отправки ответов бота (`imbot.message.add`).</div>
                     </div>
                     <div>
+                        <label for="bitrix-portal-base-url">Portal Base URL</label>
+                        <input type="text" id="bitrix-portal-base-url" placeholder="https://your-domain.bitrix24.ru">
+                        <div class="hint">Нужно для OAuth-вызовов REST (если webhook не используется).</div>
+                    </div>
+                    <div>
+                        <label for="bitrix-oauth-auth-url">OAuth Authorize URL</label>
+                        <input type="text" id="bitrix-oauth-auth-url" value="https://oauth.bitrix.info/oauth/authorize/">
+                    </div>
+                    <div>
+                        <label for="bitrix-oauth-token-url">OAuth Token URL</label>
+                        <input type="text" id="bitrix-oauth-token-url" value="https://oauth.bitrix.info/oauth/token/">
+                    </div>
+                    <div>
                         <label for="bitrix-bot-id">Bot ID</label>
                         <input type="text" id="bitrix-bot-id" placeholder="62">
                     </div>
                     <div>
                         <label for="bitrix-collection-name">Коллекция для /price</label>
                         <input type="text" id="bitrix-collection-name" value="my_collection">
+                    </div>
+                    <div>
+                        <label for="bitrix-docs-collection-name">Коллекция для /search</label>
+                        <input type="text" id="bitrix-docs-collection-name" value="passports_collection">
                     </div>
                     <div>
                         <label for="bitrix-search-mode">Режим поиска</label>
@@ -469,6 +486,9 @@
             <div class="section">
                 <button id="integrations-refresh">Обновить настройки</button>
                 <button id="integrations-save">Сохранить настройки</button>
+                <button id="bitrix-oauth-connect">Подключить Bitrix24 (OAuth)</button>
+                <button id="bitrix-oauth-refresh">Обновить OAuth токен</button>
+                <button id="bitrix-oauth-status">Проверить OAuth статус</button>
                 <div class="status" id="integrations-status">Статус: ожидание.</div>
                 <div class="log-output" id="integrations-log">Логи интеграций появятся здесь.</div>
             </div>
