@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Query
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Query, Body
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse
 from qdrant_client import QdrantClient, models
@@ -20,7 +20,7 @@ import fastembed
 import fastapi
 import importlib.metadata
 from time import perf_counter
-from typing import Optional, List
+from typing import Optional, List, Dict, Any
 import uuid
 import shutil
 from pdf2image import convert_from_bytes
@@ -57,7 +57,27 @@ qdrant_client = QdrantClient(host=os.getenv("QDRANT_HOST", "qdrant"), port=int(o
 upload_jobs = {}
 stock_jobs = {}
 passports_jobs = {}
+chat_sessions: Dict[str, List[Dict[str, str]]] = {}
 hf_home = os.getenv("HF_HOME", os.path.expanduser("~/.cache/huggingface"))
+
+runtime_config: Dict[str, Dict[str, Any]] = {
+    "polza": {
+        "api_key": "",
+        "model": "openai/gpt-4o",
+        "base_url": "https://polza.ai/api/v1/chat/completions",
+        "temperature": 0.2,
+        "max_tokens": 500,
+    },
+    "bitrix": {
+        "client_id": "",
+        "client_secret": "",
+        "redirect_uri": "",
+        "webhook_url": "",
+        "bot_id": "",
+        "collection_name": "my_collection",
+        "search_mode": "hybrid",
+    },
+}
 
 def default_ollama_base_url():
     if os.path.exists("/.dockerenv"):
@@ -72,6 +92,92 @@ ollama_openai_embeddings_url = f"{ollama_base_url}/v1/embeddings"
 # Initialize FastEmbed Sparse Model
 # Using a standard SPLADE model which acts as a learned BM25 replacement.
 sparse_embedding_model = SparseTextEmbedding(model_name="prithivida/Splade_PP_en_v1")
+
+
+def mask_secret(value: str) -> str:
+    if not value:
+        return ""
+    if len(value) <= 6:
+        return "***"
+    return f"{value[:3]}***{value[-2:]}"
+
+
+def runtime_config_response() -> Dict[str, Any]:
+    polza = runtime_config["polza"]
+    bitrix = runtime_config["bitrix"]
+    return {
+        "polza": {
+            "configured": bool(polza.get("api_key")),
+            "api_key_masked": mask_secret(polza.get("api_key", "")),
+            "model": polza.get("model"),
+            "base_url": polza.get("base_url"),
+            "temperature": polza.get("temperature"),
+            "max_tokens": polza.get("max_tokens"),
+        },
+        "bitrix": {
+            "client_id": bitrix.get("client_id", ""),
+            "client_secret_masked": mask_secret(bitrix.get("client_secret", "")),
+            "redirect_uri": bitrix.get("redirect_uri", ""),
+            "webhook_url": bitrix.get("webhook_url", ""),
+            "bot_id": bitrix.get("bot_id", ""),
+            "collection_name": bitrix.get("collection_name", "my_collection"),
+            "search_mode": bitrix.get("search_mode", "hybrid"),
+        },
+    }
+
+
+@app.get("/runtime_config")
+async def get_runtime_config():
+    return runtime_config_response()
+
+
+@app.post("/runtime_config")
+async def set_runtime_config(payload: Dict[str, Any] = Body(...)):
+    polza = runtime_config["polza"]
+    bitrix = runtime_config["bitrix"]
+
+    polza_updates = payload.get("polza", {}) if isinstance(payload.get("polza", {}), dict) else {}
+    bitrix_updates = payload.get("bitrix", {}) if isinstance(payload.get("bitrix", {}), dict) else {}
+
+    if "api_key" in polza_updates:
+        polza["api_key"] = str(polza_updates.get("api_key") or "").strip()
+    if "model" in polza_updates:
+        polza["model"] = str(polza_updates.get("model") or "openai/gpt-4o").strip() or "openai/gpt-4o"
+    if "base_url" in polza_updates:
+        polza["base_url"] = str(polza_updates.get("base_url") or "https://polza.ai/api/v1/chat/completions").strip()
+    if "temperature" in polza_updates:
+        try:
+            temperature = float(polza_updates.get("temperature"))
+            polza["temperature"] = max(0.0, min(2.0, temperature))
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="Invalid polza.temperature")
+    if "max_tokens" in polza_updates:
+        try:
+            max_tokens = int(polza_updates.get("max_tokens"))
+            if max_tokens <= 0:
+                raise ValueError()
+            polza["max_tokens"] = max_tokens
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="Invalid polza.max_tokens")
+
+    for key in [
+        "client_id",
+        "client_secret",
+        "redirect_uri",
+        "webhook_url",
+        "bot_id",
+        "collection_name",
+        "search_mode",
+    ]:
+        if key in bitrix_updates:
+            bitrix[key] = str(bitrix_updates.get(key) or "").strip()
+
+    mode = bitrix.get("search_mode", "hybrid").lower().strip()
+    if mode not in {"hybrid", "dense", "sparse"}:
+        raise HTTPException(status_code=400, detail="bitrix.search_mode must be hybrid, dense or sparse")
+    bitrix["search_mode"] = mode
+
+    return {"status": "updated", "config": runtime_config_response()}
 
 def safe_upsert(collection_name: str, points: list):
     try:
@@ -1149,12 +1255,13 @@ async def stock_status(job_id: str):
         raise HTTPException(status_code=404, detail="Job not found")
     return stock_jobs[job_id]
 
-@app.get("/search")
-async def search(
-    query: str = Query(...),
-    collection_name: str = Query(...),
-    only_in_stock: bool = Query(False),
-    mode: str = Query("hybrid"),
+
+async def run_catalog_search(
+    *,
+    query: str,
+    collection_name: str,
+    only_in_stock: bool = False,
+    mode: str = "hybrid",
 ):
     mode = mode.lower().strip()
     if mode not in {"hybrid", "dense", "sparse"}:
@@ -1164,11 +1271,9 @@ async def search(
     sparse_vector = None
 
     if mode in {"hybrid", "dense"}:
-        # Dense vector for semantic search from Ollama
         dense_vector = await get_ollama_embedding(query)
 
     if mode in {"hybrid", "sparse"}:
-        # Sparse vector from FastEmbed (No more re-indexing!)
         sparse_vector_gen = list(sparse_embedding_model.embed([query]))[0]
         sparse_vector = models.SparseVector(
             indices=sparse_vector_gen.indices.tolist(),
@@ -1214,49 +1319,266 @@ async def search(
             query_filter=query_filter,
         ).points
 
-    # Hybrid/sparse/dense search using Query API
-    try:
-        in_stock_filter = models.Filter(
-            must=[
-                models.FieldCondition(
-                    key="Остаток",
-                    range=models.Range(gt=0),
-                )
-            ]
-        )
+    in_stock_filter = models.Filter(
+        must=[
+            models.FieldCondition(
+                key="Остаток",
+                range=models.Range(gt=0),
+            )
+        ]
+    )
 
-        if only_in_stock:
-            points = query_points(15, in_stock_filter)
-            return {
-                "results": points,
-                "debug": {
-                    "mode": mode,
-                    "dense_dim": len(dense_vector) if dense_vector is not None else None,
-                    "sparse_nonzero": len(sparse_vector.indices) if sparse_vector is not None else None,
-                },
-            }
-
-        in_stock_points = query_points(5, in_stock_filter)
-        general_points = query_points(15, None)
-
-        seen_ids = {point.id for point in in_stock_points}
-        combined = list(in_stock_points)
-        for point in general_points:
-            if point.id in seen_ids:
-                continue
-            combined.append(point)
-            seen_ids.add(point.id)
-            if len(combined) >= 15:
-                break
-
+    if only_in_stock:
+        points = query_points(15, in_stock_filter)
         return {
-            "results": combined,
+            "results": points,
             "debug": {
                 "mode": mode,
                 "dense_dim": len(dense_vector) if dense_vector is not None else None,
                 "sparse_nonzero": len(sparse_vector.indices) if sparse_vector is not None else None,
             },
         }
+
+    in_stock_points = query_points(5, in_stock_filter)
+    general_points = query_points(15, None)
+
+    seen_ids = {point.id for point in in_stock_points}
+    combined = list(in_stock_points)
+    for point in general_points:
+        if point.id in seen_ids:
+            continue
+        combined.append(point)
+        seen_ids.add(point.id)
+        if len(combined) >= 15:
+            break
+
+    return {
+        "results": combined,
+        "debug": {
+            "mode": mode,
+            "dense_dim": len(dense_vector) if dense_vector is not None else None,
+            "sparse_nonzero": len(sparse_vector.indices) if sparse_vector is not None else None,
+        },
+    }
+
+
+def build_context_from_results(results: List[Any], limit: int = 5) -> str:
+    lines = []
+    for idx, point in enumerate(results[:limit], start=1):
+        payload = point.payload or {}
+        article = payload.get("Артикул", "")
+        name = payload.get("Наименование", "")
+        price = payload.get("Тариф с НДС, руб", "")
+        stock = payload.get("Остаток", "")
+        lines.append(
+            f"{idx}. Артикул: {article}; Наименование: {name}; Цена: {price}; Остаток: {stock}"
+        )
+    return "\n".join(lines)
+
+
+async def polza_chat_completion(dialog_id: str, user_query: str, context: str) -> str:
+    polza = runtime_config["polza"]
+    api_key = polza.get("api_key", "").strip()
+    if not api_key:
+        return "LLM не настроена: укажите Polza API key в веб-интерфейсе."
+
+    history = chat_sessions.setdefault(dialog_id, [])
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "Ты помощник по прайс-листу. Отвечай кратко и по фактам. "
+                "Если данных недостаточно — честно сообщи об этом."
+            ),
+        }
+    ]
+    messages.extend(history[-10:])
+    messages.append(
+        {
+            "role": "user",
+            "content": f"Запрос: {user_query}\n\nДоступные данные поиска:\n{context}",
+        }
+    )
+
+    body = {
+        "model": polza.get("model") or "openai/gpt-4o",
+        "messages": messages,
+        "temperature": polza.get("temperature", 0.2),
+        "max_tokens": polza.get("max_tokens", 500),
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            response = await client.post(
+                polza.get("base_url") or "https://polza.ai/api/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                },
+                json=body,
+            )
+            response.raise_for_status()
+            data = response.json()
+            content = (
+                data.get("choices", [{}])[0]
+                .get("message", {})
+                .get("content", "")
+                .strip()
+            )
+            if not content:
+                content = "Не удалось получить текстовый ответ от LLM."
+    except Exception as exc:
+        logger.error("Polza request failed: %s", exc, exc_info=True)
+        content = "LLM временно недоступна. Ниже — найденные позиции без генерации."
+
+    history.append({"role": "user", "content": user_query})
+    history.append({"role": "assistant", "content": content})
+    if len(history) > 20:
+        del history[:-20]
+    return content
+
+
+def extract_bitrix_message(payload: Dict[str, Any]) -> Dict[str, str]:
+    data = payload.get("data", {}) if isinstance(payload.get("data"), dict) else {}
+    params = data.get("PARAMS", {}) if isinstance(data.get("PARAMS"), dict) else {}
+
+    text = (
+        data.get("MESSAGE")
+        or params.get("MESSAGE")
+        or payload.get("message")
+        or ""
+    )
+    text = str(text).strip()
+
+    dialog_id = (
+        data.get("DIALOG_ID")
+        or params.get("DIALOG_ID")
+        or data.get("CHAT_ID")
+        or params.get("CHAT_ID")
+        or payload.get("dialog_id")
+        or payload.get("chat_id")
+        or "default-dialog"
+    )
+
+    user_id = (
+        data.get("FROM_USER_ID")
+        or params.get("FROM_USER_ID")
+        or payload.get("user_id")
+        or ""
+    )
+
+    return {
+        "text": text,
+        "dialog_id": str(dialog_id),
+        "user_id": str(user_id),
+    }
+
+
+async def send_bitrix_message(dialog_id: str, message: str):
+    webhook_url = runtime_config["bitrix"].get("webhook_url", "").strip()
+    if not webhook_url:
+        logger.warning("Bitrix webhook_url is not configured. Skip outbound message.")
+        return
+
+    method_url = webhook_url.rstrip("/") + "/imbot.message.add.json"
+    payload = {
+        "DIALOG_ID": dialog_id,
+        "MESSAGE": message,
+    }
+    bot_id = runtime_config["bitrix"].get("bot_id", "").strip()
+    if bot_id:
+        payload["BOT_ID"] = bot_id
+
+    try:
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            response = await client.post(method_url, data=payload)
+            response.raise_for_status()
+    except Exception as exc:
+        logger.error("Failed to send Bitrix message: %s", exc, exc_info=True)
+
+
+@app.post("/bitrix/webhook")
+async def bitrix_webhook(payload: Dict[str, Any] = Body(default={})):  # noqa: B008
+    incoming = extract_bitrix_message(payload if isinstance(payload, dict) else {})
+    text = incoming["text"]
+    dialog_id = incoming["dialog_id"]
+
+    if not text:
+        return {"status": "ignored", "reason": "empty message"}
+
+    normalized = text.strip()
+    lower = normalized.lower()
+
+    if lower in {"/help", "help"}:
+        response_text = (
+            "Команды бота:\n"
+            "/help — помощь\n"
+            "/price <запрос> — поиск по прайс-листу + LLM\n"
+            "/newchat — очистить контекст диалога\n"
+            "/clear — очистить контекст диалога"
+        )
+        await send_bitrix_message(dialog_id, response_text)
+        return {"status": "ok", "reply": response_text}
+
+    if lower in {"/newchat", "/clear"}:
+        chat_sessions[dialog_id] = []
+        response_text = "Контекст диалога очищен. Начинаем новый чат."
+        await send_bitrix_message(dialog_id, response_text)
+        return {"status": "ok", "reply": response_text}
+
+    if lower.startswith("/price"):
+        query_text = normalized[6:].strip()
+        if not query_text:
+            response_text = "Укажи запрос после команды: /price <что ищем>"
+            await send_bitrix_message(dialog_id, response_text)
+            return {"status": "ok", "reply": response_text}
+
+        bitrix_cfg = runtime_config["bitrix"]
+        collection_name = bitrix_cfg.get("collection_name", "my_collection") or "my_collection"
+        mode = bitrix_cfg.get("search_mode", "hybrid") or "hybrid"
+
+        try:
+            search_payload = await run_catalog_search(
+                query=query_text,
+                collection_name=collection_name,
+                only_in_stock=False,
+                mode=mode,
+            )
+            results = search_payload.get("results", [])
+            if not results:
+                response_text = "Ничего не найдено по прайс-листу."
+                await send_bitrix_message(dialog_id, response_text)
+                return {"status": "ok", "reply": response_text}
+
+            context = build_context_from_results(results, limit=5)
+            llm_answer = await polza_chat_completion(dialog_id, query_text, context)
+            response_text = f"{llm_answer}\n\nНайдено:\n{context}"
+            await send_bitrix_message(dialog_id, response_text[:3800])
+            return {"status": "ok", "reply": response_text}
+        except Exception as exc:
+            logger.error("/price processing failed: %s", exc, exc_info=True)
+            response_text = f"Ошибка обработки /price: {exc}"
+            await send_bitrix_message(dialog_id, response_text)
+            return {"status": "error", "reply": response_text}
+
+    response_text = "Неизвестная команда. Используй /help"
+    await send_bitrix_message(dialog_id, response_text)
+    return {"status": "ok", "reply": response_text}
+
+@app.get("/search")
+async def search(
+    query: str = Query(...),
+    collection_name: str = Query(...),
+    only_in_stock: bool = Query(False),
+    mode: str = Query("hybrid"),
+):
+    try:
+        return await run_catalog_search(
+            query=query,
+            collection_name=collection_name,
+            only_in_stock=only_in_stock,
+            mode=mode,
+        )
     except Exception as e:
         logger.error(f"Search failed: {e}", exc_info=True)
         # Return error details to the client for easier debugging

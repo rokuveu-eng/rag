@@ -224,6 +224,7 @@ http://localhost:8424
 - Асинхронная загрузка остатков.
 - Поиск по основной коллекции (режимы: hybrid/dense/sparse) с выводом `payload` и `score`.
 - Поиск по паспортам (PDF) с отображением score, payload и диагностикой по векторам.
+- Вкладка **«Интеграции»** для настройки Polza.ai и Bitrix24 прямо из веб-интерфейса.
 
 ### Как пользоваться
 1. Откройте `http://localhost:8424` в браузере.
@@ -231,6 +232,124 @@ http://localhost:8424
 3. В этой же вкладке используйте блок **«Поиск (основная коллекция)»**: введите запрос, выберите режим и нажмите **«Искать»**.
 4. Вкладка **«Остатки»** — загрузите файл остатков, если нужно фильтровать по наличию.
 5. Вкладка **«Паспорта»** — загрузите PDF и выполняйте поиск по паспорту изделия.
+6. Вкладка **«Интеграции»** — укажите параметры Polza.ai и Bitrix24 для чат-бота.
+
+---
+
+## 🤖 Интеграции: Polza.ai + Bitrix24
+
+Ветка `feature/bitrix24-chatbot` добавляет чат-бот сценарий:
+
+1. Бот получает команду `/price <запрос>` из Bitrix24.
+2. Backend выполняет поиск по коллекции (`hybrid` / `dense` / `sparse`).
+3. Из найденных результатов формируется контекст.
+4. Контекст отправляется в Polza Chat Completions.
+5. Готовый ответ + найденные позиции отправляются обратно в Bitrix24.
+
+Также поддерживаются команды:
+- `/help` — список команд;
+- `/newchat` и `/clear` — очистка контекста диалога.
+
+Контекст сообщений хранится в памяти backend (по `dialog_id`), без записи в БД.
+
+---
+
+## ⚙️ Runtime-конфигурация интеграций
+
+Настройки Polza и Bitrix сохраняются **в памяти процесса FastAPI** (runtime-only):
+- не пишутся в файл;
+- сбрасываются после рестарта контейнера/API;
+- секреты в ответах отдаются в маскированном виде.
+
+### `GET /runtime_config`
+
+Возвращает текущую конфигурацию интеграций в безопасном виде:
+- `polza.configured`, `polza.api_key_masked`, `model`, `base_url`, `temperature`, `max_tokens`;
+- `bitrix.client_id`, `client_secret_masked`, `redirect_uri`, `webhook_url`, `bot_id`, `collection_name`, `search_mode`.
+
+Пример:
+
+```bash
+curl http://localhost:8424/runtime_config
+```
+
+### `POST /runtime_config`
+
+Обновляет runtime-параметры.
+
+Пример:
+
+```bash
+curl -X POST http://localhost:8424/runtime_config \
+  -H "Content-Type: application/json" \
+  -d '{
+    "polza": {
+      "api_key": "pk_xxx",
+      "model": "openai/gpt-4o",
+      "base_url": "https://polza.ai/api/v1/chat/completions",
+      "temperature": 0.2,
+      "max_tokens": 500
+    },
+    "bitrix": {
+      "client_id": "local.xxxxx",
+      "client_secret": "secret",
+      "redirect_uri": "https://example.com/oauth/callback",
+      "webhook_url": "https://your-domain.bitrix24.ru/rest/1/xxxxxxxx",
+      "bot_id": "62",
+      "collection_name": "my_collection",
+      "search_mode": "hybrid"
+    }
+  }'
+```
+
+> `bitrix.search_mode` должен быть одним из: `hybrid`, `dense`, `sparse`.
+
+---
+
+## 🧠 Bitrix24 webhook API
+
+Эндпоинт входящих сообщений от Bitrix:
+
+```
+POST /bitrix/webhook
+```
+
+Поддерживаемые команды:
+- `/help`
+- `/price <запрос>`
+- `/newchat`
+- `/clear`
+
+Исходящие ответы отправляются в Bitrix методом:
+
+```
+imbot.message.add
+```
+
+на основе `bitrix.webhook_url` (добавляется `/imbot.message.add.json`).
+
+Минимальный локальный smoke-пример:
+
+```bash
+curl -X POST http://localhost:8424/bitrix/webhook \
+  -H "Content-Type: application/json" \
+  -d '{
+    "data": {
+      "MESSAGE": "/price автоматический выключатель 16А",
+      "DIALOG_ID": "chat123",
+      "FROM_USER_ID": "1"
+    }
+  }'
+```
+
+---
+
+## 🔐 Примечания по безопасности
+
+- API-ключ Polza и Bitrix secret не сохраняются на диск (только runtime память).
+- После сохранения через UI поля секретов очищаются в браузере.
+- В API-ответах используется маскирование секретов.
+- Для production рекомендуется вынести хранение секретов в защищённое хранилище (Vault/KMS/secret manager).
 
 ---
 

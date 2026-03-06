@@ -38,6 +38,11 @@ const mainSearchButton = document.getElementById('main-search-button');
 const mainSearchStatus = document.getElementById('main-search-status');
 const mainSearchOutput = document.getElementById('main-search-output');
 
+const integrationsRefreshButton = document.getElementById('integrations-refresh');
+const integrationsSaveButton = document.getElementById('integrations-save');
+const integrationsStatus = document.getElementById('integrations-status');
+const integrationsLog = document.getElementById('integrations-log');
+
 const setStatus = (message) => {
     statusText.textContent = `Статус: ${message}`;
 };
@@ -129,6 +134,63 @@ const setMainSearchOutput = (message) => {
         return;
     }
     mainSearchOutput.textContent = message;
+};
+
+const setIntegrationsStatus = (message) => {
+    if (!integrationsStatus) {
+        return;
+    }
+    integrationsStatus.textContent = `Статус: ${message}`;
+};
+
+const addIntegrationsLog = (message) => {
+    if (!integrationsLog) {
+        return;
+    }
+    const timestamp = new Date().toLocaleTimeString();
+    integrationsLog.textContent = `[${timestamp}] ${message}\n` + integrationsLog.textContent;
+};
+
+const renderRuntimeConfig = (payload) => {
+    const polza = payload?.polza || {};
+    const bitrix = payload?.bitrix || {};
+
+    const polzaApiKeyMasked = document.getElementById('polza-api-key-masked');
+    const polzaModel = document.getElementById('polza-model');
+    const polzaTemperature = document.getElementById('polza-temperature');
+    const polzaMaxTokens = document.getElementById('polza-max-tokens');
+    const polzaBaseUrl = document.getElementById('polza-base-url');
+
+    const bitrixClientId = document.getElementById('bitrix-client-id');
+    const bitrixClientSecretMasked = document.getElementById('bitrix-client-secret-masked');
+    const bitrixRedirectUri = document.getElementById('bitrix-redirect-uri');
+    const bitrixWebhookUrl = document.getElementById('bitrix-webhook-url');
+    const bitrixBotId = document.getElementById('bitrix-bot-id');
+    const bitrixCollectionName = document.getElementById('bitrix-collection-name');
+    const bitrixSearchMode = document.getElementById('bitrix-search-mode');
+
+    if (polzaApiKeyMasked) polzaApiKeyMasked.value = polza.api_key_masked || '';
+    if (polzaModel) polzaModel.value = polza.model || 'openai/gpt-4o';
+    if (polzaTemperature) polzaTemperature.value = polza.temperature ?? 0.2;
+    if (polzaMaxTokens) polzaMaxTokens.value = polza.max_tokens ?? 500;
+    if (polzaBaseUrl) polzaBaseUrl.value = polza.base_url || 'https://polza.ai/api/v1/chat/completions';
+
+    if (bitrixClientId) bitrixClientId.value = bitrix.client_id || '';
+    if (bitrixClientSecretMasked) bitrixClientSecretMasked.value = bitrix.client_secret_masked || '';
+    if (bitrixRedirectUri) bitrixRedirectUri.value = bitrix.redirect_uri || '';
+    if (bitrixWebhookUrl) bitrixWebhookUrl.value = bitrix.webhook_url || '';
+    if (bitrixBotId) bitrixBotId.value = bitrix.bot_id || '';
+    if (bitrixCollectionName) bitrixCollectionName.value = bitrix.collection_name || 'my_collection';
+    if (bitrixSearchMode) bitrixSearchMode.value = bitrix.search_mode || 'hybrid';
+};
+
+const loadRuntimeConfig = async () => {
+    const response = await fetch('/runtime_config');
+    if (!response.ok) {
+        const payload = await response.json().catch(() => ({}));
+        throw new Error(payload.detail || 'Не удалось получить runtime_config');
+    }
+    return response.json();
 };
 
 const addHfCacheLog = (message) => {
@@ -960,3 +1022,111 @@ if (hfCacheClearButton) {
         }
     });
 }
+
+if (integrationsRefreshButton) {
+    integrationsRefreshButton.addEventListener('click', async () => {
+        integrationsRefreshButton.disabled = true;
+        setIntegrationsStatus('загрузка настроек...');
+        try {
+            const payload = await loadRuntimeConfig();
+            renderRuntimeConfig(payload);
+            addIntegrationsLog('Настройки интеграций обновлены.');
+            setIntegrationsStatus('готово');
+        } catch (error) {
+            setIntegrationsStatus('ошибка');
+            addIntegrationsLog(`Ошибка: ${error.message}`);
+            alert(error.message);
+        } finally {
+            integrationsRefreshButton.disabled = false;
+        }
+    });
+}
+
+if (integrationsSaveButton) {
+    integrationsSaveButton.addEventListener('click', async () => {
+        const polzaApiKey = document.getElementById('polza-api-key')?.value || '';
+        const polzaModel = document.getElementById('polza-model')?.value || 'openai/gpt-4o';
+        const polzaTemperature = parseFloat(document.getElementById('polza-temperature')?.value || '0.2');
+        const polzaMaxTokens = parseInt(document.getElementById('polza-max-tokens')?.value || '500', 10);
+        const polzaBaseUrl = document.getElementById('polza-base-url')?.value || 'https://polza.ai/api/v1/chat/completions';
+
+        const bitrixClientId = document.getElementById('bitrix-client-id')?.value || '';
+        const bitrixClientSecret = document.getElementById('bitrix-client-secret')?.value || '';
+        const bitrixRedirectUri = document.getElementById('bitrix-redirect-uri')?.value || '';
+        const bitrixWebhookUrl = document.getElementById('bitrix-webhook-url')?.value || '';
+        const bitrixBotId = document.getElementById('bitrix-bot-id')?.value || '';
+        const bitrixCollectionName = document.getElementById('bitrix-collection-name')?.value || 'my_collection';
+        const bitrixSearchMode = document.getElementById('bitrix-search-mode')?.value || 'hybrid';
+
+        const polzaPayload = {
+            model: polzaModel,
+            temperature: Number.isFinite(polzaTemperature) ? polzaTemperature : 0.2,
+            max_tokens: Number.isFinite(polzaMaxTokens) ? polzaMaxTokens : 500,
+            base_url: polzaBaseUrl,
+        };
+        if (polzaApiKey.trim()) {
+            polzaPayload.api_key = polzaApiKey.trim();
+        }
+
+        const bitrixPayload = {
+            client_id: bitrixClientId,
+            redirect_uri: bitrixRedirectUri,
+            webhook_url: bitrixWebhookUrl,
+            bot_id: bitrixBotId,
+            collection_name: bitrixCollectionName,
+            search_mode: bitrixSearchMode,
+        };
+        if (bitrixClientSecret.trim()) {
+            bitrixPayload.client_secret = bitrixClientSecret.trim();
+        }
+
+        integrationsSaveButton.disabled = true;
+        setIntegrationsStatus('сохранение...');
+        try {
+            const response = await fetch('/runtime_config', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    polza: polzaPayload,
+                    bitrix: bitrixPayload,
+                })
+            });
+
+            if (!response.ok) {
+                const payload = await response.json().catch(() => ({}));
+                throw new Error(payload.detail || 'Не удалось сохранить настройки интеграций');
+            }
+
+            const payload = await response.json();
+            renderRuntimeConfig(payload.config || {});
+
+            const polzaApiKeyInput = document.getElementById('polza-api-key');
+            const bitrixClientSecretInput = document.getElementById('bitrix-client-secret');
+            if (polzaApiKeyInput) polzaApiKeyInput.value = '';
+            if (bitrixClientSecretInput) bitrixClientSecretInput.value = '';
+
+            addIntegrationsLog('Настройки интеграций сохранены.');
+            setIntegrationsStatus('сохранено');
+        } catch (error) {
+            setIntegrationsStatus('ошибка');
+            addIntegrationsLog(`Ошибка: ${error.message}`);
+            alert(error.message);
+        } finally {
+            integrationsSaveButton.disabled = false;
+        }
+    });
+}
+
+(async () => {
+    if (!integrationsRefreshButton) {
+        return;
+    }
+    try {
+        const payload = await loadRuntimeConfig();
+        renderRuntimeConfig(payload);
+    } catch {
+        // ignore bootstrap error
+    }
+})();

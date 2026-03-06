@@ -163,6 +163,7 @@
             <button class="tab-button" data-tab="passports">Паспорта</button>
             <button class="tab-button" data-tab="delete">Удаление</button>
             <button class="tab-button" data-tab="hf-cache">HF кэш</button>
+            <button class="tab-button" data-tab="integrations">Интеграции</button>
         </div>
 
         <div class="tab-content active" id="tab-index">
@@ -387,6 +388,89 @@
                 <button id="hf-cache-clear" style="background: #ef4444;">Очистить HF‑кэш</button>
                 <div class="status" id="hf-cache-status">Статус: ожидание.</div>
                 <div class="log-output" id="hf-cache-log">Логи кэша появятся здесь.</div>
+            </div>
+        </div>
+
+        <div class="tab-content" id="tab-integrations">
+            <div class="section" style="margin-top:0; padding-top:0; border-top:none;">
+                <h2>Polza.ai (LLM)</h2>
+                <div class="grid">
+                    <div>
+                        <label for="polza-api-key">API key</label>
+                        <input type="password" id="polza-api-key" placeholder="pk_...">
+                        <div class="hint">Ключ хранится только в памяти backend (сбросится после рестарта).</div>
+                    </div>
+                    <div>
+                        <label for="polza-model">Модель</label>
+                        <input type="text" id="polza-model" value="openai/gpt-4o">
+                    </div>
+                    <div>
+                        <label for="polza-temperature">Temperature</label>
+                        <input type="number" id="polza-temperature" value="0.2" min="0" max="2" step="0.1">
+                    </div>
+                    <div>
+                        <label for="polza-max-tokens">Max tokens</label>
+                        <input type="number" id="polza-max-tokens" value="500" min="1">
+                    </div>
+                    <div>
+                        <label for="polza-base-url">Base URL</label>
+                        <input type="text" id="polza-base-url" value="https://polza.ai/api/v1/chat/completions">
+                    </div>
+                    <div>
+                        <label for="polza-api-key-masked">Текущий ключ</label>
+                        <input type="text" id="polza-api-key-masked" value="" readonly>
+                    </div>
+                </div>
+            </div>
+
+            <div class="section">
+                <h2>Bitrix24 Bot</h2>
+                <div class="grid">
+                    <div>
+                        <label for="bitrix-client-id">Client ID</label>
+                        <input type="text" id="bitrix-client-id" placeholder="local.xxxxx">
+                    </div>
+                    <div>
+                        <label for="bitrix-client-secret">Client Secret</label>
+                        <input type="password" id="bitrix-client-secret" placeholder="***">
+                    </div>
+                    <div>
+                        <label for="bitrix-client-secret-masked">Текущий secret</label>
+                        <input type="text" id="bitrix-client-secret-masked" value="" readonly>
+                    </div>
+                    <div>
+                        <label for="bitrix-redirect-uri">Redirect URI</label>
+                        <input type="text" id="bitrix-redirect-uri" placeholder="https://.../oauth/callback">
+                    </div>
+                    <div>
+                        <label for="bitrix-webhook-url">Webhook URL</label>
+                        <input type="text" id="bitrix-webhook-url" placeholder="https://your-domain/rest/...">
+                        <div class="hint">Используется для отправки ответов бота (`imbot.message.add`).</div>
+                    </div>
+                    <div>
+                        <label for="bitrix-bot-id">Bot ID</label>
+                        <input type="text" id="bitrix-bot-id" placeholder="62">
+                    </div>
+                    <div>
+                        <label for="bitrix-collection-name">Коллекция для /price</label>
+                        <input type="text" id="bitrix-collection-name" value="my_collection">
+                    </div>
+                    <div>
+                        <label for="bitrix-search-mode">Режим поиска</label>
+                        <select id="bitrix-search-mode">
+                            <option value="hybrid" selected>Hybrid</option>
+                            <option value="dense">Dense</option>
+                            <option value="sparse">Sparse</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+
+            <div class="section">
+                <button id="integrations-refresh">Обновить настройки</button>
+                <button id="integrations-save">Сохранить настройки</button>
+                <div class="status" id="integrations-status">Статус: ожидание.</div>
+                <div class="log-output" id="integrations-log">Логи интеграций появятся здесь.</div>
             </div>
         </div>
     </div>
