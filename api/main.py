@@ -94,7 +94,7 @@ def default_ollama_base_url():
         return "http://ollama:11434"
     return "http://localhost:11434"
 
-ollama_base_url = os.getenv("OLLAMA_BASE_URL", default_ollama_base_url())
+ollama_base_url = (os.getenv("OLLAMA_BASE_URL") or "").strip() or default_ollama_base_url()
 ollama_api_url = f"{ollama_base_url}/api/embeddings"
 ollama_batch_api_url = f"{ollama_base_url}/api/embed"
 ollama_openai_embeddings_url = f"{ollama_base_url}/v1/embeddings"

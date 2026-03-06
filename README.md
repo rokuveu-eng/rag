@@ -62,6 +62,14 @@
 
 ## 🧩 Запуск
 
+Перед запуском укажите адрес внешнего Ollama сервера через переменную `OLLAMA_BASE_URL`.
+
+Пример `.env` рядом с `docker-compose.yml`:
+
+```env
+OLLAMA_BASE_URL=http://192.168.1.50:11434
+```
+
 ```bash
 docker compose up -d --build
 ```
@@ -71,9 +79,8 @@ docker compose up -d --build
 - API: http://localhost:8424
 - Веб-интерфейс: http://localhost:8424
 
-> По умолчанию API обращается к Ollama по адресу `http://localhost:11434`.
-> Если запускаете API внутри Docker и Ollama в контейнере, укажите `OLLAMA_BASE_URL=http://ollama:11434`.
-> В контейнере `localhost` указывает на сам API, поэтому для Docker нужен hostname `ollama`.
+> В этой конфигурации Ollama работает на отдельном сервере.
+> Адрес задаётся через `OLLAMA_BASE_URL` (например `http://192.168.1.50:11434`).
 > Ollama может отдавать эмбеддинги через `/api/embed`, `/api/embeddings` или `/v1/embeddings` — API автоматически пробует все варианты и проверяет размер батча.
 
 ---

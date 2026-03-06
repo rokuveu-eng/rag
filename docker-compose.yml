@@ -9,21 +9,6 @@ services:
     volumes:
       - qdrant_storage:/qdrant/storage
 
-  ollama:
-    image: ollama/ollama:latest
-    restart: unless-stopped
-    ports:
-      - "11434:11434"
-    volumes:
-      - ollama_data:/root/.ollama
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
-
   api:
     build: .
     restart: unless-stopped
@@ -32,13 +17,12 @@ services:
     environment:
       HF_HOME: /root/.cache/huggingface
       HF_HUB_CACHE: /root/.cache/huggingface/hub
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL}
     volumes:
       - hf_cache:/root/.cache/huggingface
     depends_on:
       - qdrant
-      - ollama
 
 volumes:
   qdrant_storage:
-  ollama_data:
   hf_cache:
