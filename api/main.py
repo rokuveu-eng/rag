@@ -269,16 +269,22 @@ async def ensure_bitrix_access_token() -> bool:
         return False
 
 
-async def bitrix_api_call(method: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+async def bitrix_api_call(method: str, payload: Dict[str, Any], *, prefer_oauth: bool = False) -> Dict[str, Any]:
     bitrix = runtime_config["bitrix"]
     webhook_url = (bitrix.get("webhook_url") or "").strip().rstrip("/")
 
-    if webhook_url:
+    if webhook_url and not prefer_oauth:
         method_url = f"{webhook_url}/{method}.json"
         async with httpx.AsyncClient(timeout=20.0) as client:
             response = await client.post(method_url, data=payload)
             response.raise_for_status()
-            return response.json() if response.content else {"result": True}
+            data = response.json() if response.content else {"result": True}
+
+        if isinstance(data, dict) and data.get("error"):
+            err = data.get("error_description") or data.get("error")
+            raise HTTPException(status_code=400, detail=f"Bitrix API error (webhook): {err}")
+
+        return data
 
     if not await ensure_bitrix_access_token():
         raise HTTPException(status_code=400, detail="Bitrix OAuth не подключён или токен недействителен")
@@ -299,7 +305,18 @@ async def bitrix_api_call(method: str, payload: Dict[str, Any]) -> Dict[str, Any
                 raise HTTPException(status_code=401, detail="Не удалось обновить Bitrix OAuth токен")
             oauth_payload["auth"] = bitrix.get("access_token", "")
             response = await client.post(method_url, data=oauth_payload)
-        response.raise_for_status()
+        try:
+            response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            detail = ""
+            try:
+                err_payload = exc.response.json()
+                if isinstance(err_payload, dict):
+                    detail = str(err_payload.get("error_description") or err_payload.get("error") or "")
+            except Exception:
+                detail = (exc.response.text or "").strip()
+            suffix = f": {detail}" if detail else ""
+            raise HTTPException(status_code=400, detail=f"Bitrix HTTP error {exc.response.status_code}{suffix}")
         data = response.json() if response.content else {"result": True}
 
     if isinstance(data, dict) and data.get("error"):
@@ -1772,7 +1789,17 @@ async def bitrix_bot_register(payload: Dict[str, Any] = Body(default={})):  # no
     if properties:
         register_payload["PROPERTIES"] = properties
 
-    api_result = await bitrix_api_call("imbot.register", register_payload)
+    try:
+        api_result = await bitrix_api_call("imbot.register", register_payload, prefer_oauth=True)
+    except HTTPException as exc:
+        detail = str(exc.detail)
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail=(
+                f"Не удалось зарегистрировать бота через OAuth. {detail}. "
+                "Проверьте scope приложения (bot/imbot), корректность portal_base_url и handler_url."
+            ),
+        )
     bot_id = extract_bot_id_from_bitrix_result(api_result)
     if bot_id:
         bitrix["bot_id"] = bot_id
@@ -1804,7 +1831,17 @@ async def bitrix_bot_update(payload: Dict[str, Any] = Body(default={})):  # noqa
     if payload.get("work_position"):
         update_payload["WORK_POSITION"] = str(payload.get("work_position") or "").strip()
 
-    api_result = await bitrix_api_call("imbot.update", update_payload)
+    try:
+        api_result = await bitrix_api_call("imbot.update", update_payload, prefer_oauth=True)
+    except HTTPException as exc:
+        detail = str(exc.detail)
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail=(
+                f"Не удалось обновить бота через OAuth. {detail}. "
+                "Проверьте scope приложения (bot/imbot) и корректный bot_id."
+            ),
+        )
     bitrix["bot_id"] = bot_id
     return {
         "status": "updated",

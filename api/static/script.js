@@ -193,6 +193,23 @@ const addWebChatLog = (message) => {
     webChatLog.textContent = `[${timestamp}] ${message}\n` + webChatLog.textContent;
 };
 
+const extractHttpError = async (response, fallbackMessage) => {
+    let detail = '';
+    try {
+        const payload = await response.json();
+        detail = payload?.detail || payload?.error_description || payload?.error || '';
+    } catch {
+        try {
+            detail = (await response.text()) || '';
+        } catch {
+            detail = '';
+        }
+    }
+
+    const suffix = detail ? `: ${detail}` : '';
+    return `${fallbackMessage} (HTTP ${response.status})${suffix}`;
+};
+
 const renderRuntimeConfig = (payload) => {
     const polza = payload?.polza || {};
     const bitrix = payload?.bitrix || {};
@@ -1289,8 +1306,7 @@ if (botToolsRegisterButton) {
             });
 
             if (!response.ok) {
-                const err = await response.json().catch(() => ({}));
-                throw new Error(err.detail || 'Не удалось создать бота');
+                throw new Error(await extractHttpError(response, 'Не удалось создать бота'));
             }
 
             const result = await response.json();
@@ -1335,8 +1351,7 @@ if (botToolsUpdateButton) {
             });
 
             if (!response.ok) {
-                const err = await response.json().catch(() => ({}));
-                throw new Error(err.detail || 'Не удалось обновить бота');
+                throw new Error(await extractHttpError(response, 'Не удалось обновить бота'));
             }
 
             const result = await response.json();
