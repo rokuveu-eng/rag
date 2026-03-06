@@ -164,6 +164,7 @@
             <button class="tab-button" data-tab="delete">Удаление</button>
             <button class="tab-button" data-tab="hf-cache">HF кэш</button>
             <button class="tab-button" data-tab="integrations">Интеграции</button>
+            <button class="tab-button" data-tab="bot-tools">Бот: создание и тест</button>
         </div>
 
         <div class="tab-content active" id="tab-index">
@@ -491,6 +492,78 @@
                 <button id="bitrix-oauth-status">Проверить OAuth статус</button>
                 <div class="status" id="integrations-status">Статус: ожидание.</div>
                 <div class="log-output" id="integrations-log">Логи интеграций появятся здесь.</div>
+            </div>
+        </div>
+
+        <div class="tab-content" id="tab-bot-tools">
+            <div class="section" style="margin-top:0; padding-top:0; border-top:none;">
+                <h2>Создание / обновление Bitrix24 бота</h2>
+                <div class="grid">
+                    <div>
+                        <label for="bot-tools-handler-url">Путь обработчика</label>
+                        <input type="text" id="bot-tools-handler-url" placeholder="https://btrs.monter.ru/bitrix/webhook">
+                        <div class="hint">Для EVENT_MESSAGE_ADD и EVENT_WELCOME_MESSAGE.</div>
+                    </div>
+                    <div>
+                        <label for="bot-tools-code">CODE (уникальный)</label>
+                        <input type="text" id="bot-tools-code" placeholder="my_bot_code">
+                    </div>
+                    <div>
+                        <label for="bot-tools-type">TYPE</label>
+                        <select id="bot-tools-type">
+                            <option value="B" selected>B (чат-бот)</option>
+                            <option value="H">H</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label for="bot-tools-name">Имя бота (NAME)</label>
+                        <input type="text" id="bot-tools-name" value="RAG Bot">
+                    </div>
+                    <div>
+                        <label for="bot-tools-last-name">Фамилия/доп. имя (LAST_NAME)</label>
+                        <input type="text" id="bot-tools-last-name" value="">
+                    </div>
+                    <div>
+                        <label for="bot-tools-color">Цвет (COLOR)</label>
+                        <input type="text" id="bot-tools-color" value="AQUA">
+                    </div>
+                    <div>
+                        <label for="bot-tools-email">Email</label>
+                        <input type="text" id="bot-tools-email" value="">
+                    </div>
+                    <div>
+                        <label for="bot-tools-work-position">WORK_POSITION</label>
+                        <input type="text" id="bot-tools-work-position" value="Помощник по поиску">
+                    </div>
+                    <div>
+                        <label for="bot-tools-bot-id">Bot ID (для update)</label>
+                        <input type="text" id="bot-tools-bot-id" placeholder="62">
+                    </div>
+                </div>
+            </div>
+
+            <div class="section">
+                <button id="bot-tools-register">Создать бота (imbot.register)</button>
+                <button id="bot-tools-update">Обновить бота (imbot.update)</button>
+                <div class="status" id="bot-tools-status">Статус: ожидание.</div>
+                <div class="log-output" id="bot-tools-log">Логи создания/обновления бота появятся здесь.</div>
+            </div>
+
+            <div class="section">
+                <h2>Тестовый чат (веб-версия)</h2>
+                <div class="grid">
+                    <div>
+                        <label for="web-chat-dialog-id">Dialog ID (локальный)</label>
+                        <input type="text" id="web-chat-dialog-id" value="web-test-dialog">
+                    </div>
+                    <div>
+                        <label for="web-chat-message">Сообщение</label>
+                        <input type="text" id="web-chat-message" placeholder="/help">
+                    </div>
+                </div>
+                <button id="web-chat-send" style="margin-top: 12px;">Отправить в тестовый чат</button>
+                <div class="status" id="web-chat-status">Статус: ожидание команды.</div>
+                <div class="log-output" id="web-chat-log">История тестового чата появится здесь.</div>
             </div>
         </div>
     </div>

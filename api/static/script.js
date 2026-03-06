@@ -46,6 +46,15 @@ const bitrixOauthStatusButton = document.getElementById('bitrix-oauth-status');
 const integrationsStatus = document.getElementById('integrations-status');
 const integrationsLog = document.getElementById('integrations-log');
 
+const botToolsRegisterButton = document.getElementById('bot-tools-register');
+const botToolsUpdateButton = document.getElementById('bot-tools-update');
+const botToolsStatus = document.getElementById('bot-tools-status');
+const botToolsLog = document.getElementById('bot-tools-log');
+
+const webChatSendButton = document.getElementById('web-chat-send');
+const webChatStatus = document.getElementById('web-chat-status');
+const webChatLog = document.getElementById('web-chat-log');
+
 const setStatus = (message) => {
     statusText.textContent = `Статус: ${message}`;
 };
@@ -154,6 +163,36 @@ const addIntegrationsLog = (message) => {
     integrationsLog.textContent = `[${timestamp}] ${message}\n` + integrationsLog.textContent;
 };
 
+const setBotToolsStatus = (message) => {
+    if (!botToolsStatus) {
+        return;
+    }
+    botToolsStatus.textContent = `Статус: ${message}`;
+};
+
+const addBotToolsLog = (message) => {
+    if (!botToolsLog) {
+        return;
+    }
+    const timestamp = new Date().toLocaleTimeString();
+    botToolsLog.textContent = `[${timestamp}] ${message}\n` + botToolsLog.textContent;
+};
+
+const setWebChatStatus = (message) => {
+    if (!webChatStatus) {
+        return;
+    }
+    webChatStatus.textContent = `Статус: ${message}`;
+};
+
+const addWebChatLog = (message) => {
+    if (!webChatLog) {
+        return;
+    }
+    const timestamp = new Date().toLocaleTimeString();
+    webChatLog.textContent = `[${timestamp}] ${message}\n` + webChatLog.textContent;
+};
+
 const renderRuntimeConfig = (payload) => {
     const polza = payload?.polza || {};
     const bitrix = payload?.bitrix || {};
@@ -175,6 +214,8 @@ const renderRuntimeConfig = (payload) => {
     const bitrixCollectionName = document.getElementById('bitrix-collection-name');
     const bitrixDocsCollectionName = document.getElementById('bitrix-docs-collection-name');
     const bitrixSearchMode = document.getElementById('bitrix-search-mode');
+    const botToolsBotId = document.getElementById('bot-tools-bot-id');
+    const botToolsHandlerUrl = document.getElementById('bot-tools-handler-url');
 
     if (polzaApiKeyMasked) polzaApiKeyMasked.value = polza.api_key_masked || '';
     if (polzaModel) polzaModel.value = polza.model || 'openai/gpt-4o';
@@ -193,6 +234,13 @@ const renderRuntimeConfig = (payload) => {
     if (bitrixCollectionName) bitrixCollectionName.value = bitrix.collection_name || 'my_collection';
     if (bitrixDocsCollectionName) bitrixDocsCollectionName.value = bitrix.docs_collection_name || 'passports_collection';
     if (bitrixSearchMode) bitrixSearchMode.value = bitrix.search_mode || 'hybrid';
+    if (botToolsBotId) botToolsBotId.value = bitrix.bot_id || '';
+    if (botToolsHandlerUrl && !botToolsHandlerUrl.value) {
+        const redirectUri = bitrix.redirect_uri || '';
+        if (redirectUri.includes('/bitrix/oauth/callback')) {
+            botToolsHandlerUrl.value = redirectUri.replace('/bitrix/oauth/callback', '/bitrix/webhook');
+        }
+    }
 
     if (bitrix.oauth_connected) {
         addIntegrationsLog(
@@ -1213,6 +1261,140 @@ if (bitrixOauthStatusButton) {
             alert(error.message);
         } finally {
             bitrixOauthStatusButton.disabled = false;
+        }
+    });
+}
+
+if (botToolsRegisterButton) {
+    botToolsRegisterButton.addEventListener('click', async () => {
+        const payload = {
+            handler_url: document.getElementById('bot-tools-handler-url')?.value || '',
+            code: document.getElementById('bot-tools-code')?.value || '',
+            type: document.getElementById('bot-tools-type')?.value || 'B',
+            name: document.getElementById('bot-tools-name')?.value || 'RAG Bot',
+            last_name: document.getElementById('bot-tools-last-name')?.value || '',
+            color: document.getElementById('bot-tools-color')?.value || 'AQUA',
+            email: document.getElementById('bot-tools-email')?.value || '',
+            work_position: document.getElementById('bot-tools-work-position')?.value || '',
+        };
+
+        botToolsRegisterButton.disabled = true;
+        setBotToolsStatus('создание бота...');
+
+        try {
+            const response = await fetch('/bitrix/bot/register', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload),
+            });
+
+            if (!response.ok) {
+                const err = await response.json().catch(() => ({}));
+                throw new Error(err.detail || 'Не удалось создать бота');
+            }
+
+            const result = await response.json();
+            const newBotId = result.bot_id || '';
+            const bitrixBotIdInput = document.getElementById('bitrix-bot-id');
+            const botToolsBotIdInput = document.getElementById('bot-tools-bot-id');
+            if (newBotId) {
+                if (bitrixBotIdInput) bitrixBotIdInput.value = newBotId;
+                if (botToolsBotIdInput) botToolsBotIdInput.value = newBotId;
+            }
+
+            addBotToolsLog(`Бот создан. bot_id=${newBotId || 'n/a'}, handler=${result.handler_url || 'n/a'}`);
+            setBotToolsStatus('бот создан');
+        } catch (error) {
+            setBotToolsStatus('ошибка создания');
+            addBotToolsLog(`Ошибка: ${error.message}`);
+            alert(error.message);
+        } finally {
+            botToolsRegisterButton.disabled = false;
+        }
+    });
+}
+
+if (botToolsUpdateButton) {
+    botToolsUpdateButton.addEventListener('click', async () => {
+        const payload = {
+            bot_id: document.getElementById('bot-tools-bot-id')?.value || '',
+            name: document.getElementById('bot-tools-name')?.value || '',
+            last_name: document.getElementById('bot-tools-last-name')?.value || '',
+            color: document.getElementById('bot-tools-color')?.value || '',
+            work_position: document.getElementById('bot-tools-work-position')?.value || '',
+        };
+
+        botToolsUpdateButton.disabled = true;
+        setBotToolsStatus('обновление бота...');
+
+        try {
+            const response = await fetch('/bitrix/bot/update', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload),
+            });
+
+            if (!response.ok) {
+                const err = await response.json().catch(() => ({}));
+                throw new Error(err.detail || 'Не удалось обновить бота');
+            }
+
+            const result = await response.json();
+            const updatedBotId = result.bot_id || payload.bot_id || '';
+            const bitrixBotIdInput = document.getElementById('bitrix-bot-id');
+            if (bitrixBotIdInput && updatedBotId) {
+                bitrixBotIdInput.value = updatedBotId;
+            }
+
+            addBotToolsLog(`Бот обновлён. bot_id=${updatedBotId || 'n/a'}`);
+            setBotToolsStatus('бот обновлён');
+        } catch (error) {
+            setBotToolsStatus('ошибка обновления');
+            addBotToolsLog(`Ошибка: ${error.message}`);
+            alert(error.message);
+        } finally {
+            botToolsUpdateButton.disabled = false;
+        }
+    });
+}
+
+if (webChatSendButton) {
+    webChatSendButton.addEventListener('click', async () => {
+        const dialogId = document.getElementById('web-chat-dialog-id')?.value || 'web-test-dialog';
+        const message = document.getElementById('web-chat-message')?.value || '';
+        if (!message.trim()) {
+            alert('Введите сообщение для тестового чата');
+            return;
+        }
+
+        webChatSendButton.disabled = true;
+        setWebChatStatus('обработка команды...');
+        addWebChatLog(`Вы: ${message}`);
+
+        try {
+            const response = await fetch('/bitrix/test_chat', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    dialog_id: dialogId,
+                    message,
+                }),
+            });
+
+            if (!response.ok) {
+                const err = await response.json().catch(() => ({}));
+                throw new Error(err.detail || 'Ошибка тестового чата');
+            }
+
+            const result = await response.json();
+            addWebChatLog(`Бот: ${result.reply || 'Пустой ответ'}`);
+            setWebChatStatus('ответ получен');
+        } catch (error) {
+            setWebChatStatus('ошибка');
+            addWebChatLog(`Ошибка: ${error.message}`);
+            alert(error.message);
+        } finally {
+            webChatSendButton.disabled = false;
         }
     });
 }

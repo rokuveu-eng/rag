@@ -1728,6 +1728,237 @@ async def send_bitrix_message(dialog_id: str, message: str):
         logger.error("Failed to send Bitrix message: %s", exc, exc_info=True)
 
 
+def extract_bot_id_from_bitrix_result(result_payload: Dict[str, Any]) -> str:
+    if not isinstance(result_payload, dict):
+        return ""
+    result = result_payload.get("result")
+    if isinstance(result, (int, str)):
+        return str(result)
+    if isinstance(result, dict):
+        for key in ("BOT_ID", "bot_id", "ID", "id"):
+            value = result.get(key)
+            if value not in (None, ""):
+                return str(value)
+    return ""
+
+
+@app.post("/bitrix/bot/register")
+async def bitrix_bot_register(payload: Dict[str, Any] = Body(default={})):  # noqa: B008
+    bitrix = runtime_config["bitrix"]
+    handler_url = str(payload.get("handler_url") or "").strip()
+    if not handler_url:
+        redirect_uri = str(bitrix.get("redirect_uri") or "").strip()
+        if redirect_uri.startswith("http"):
+            handler_url = redirect_uri.rsplit("/bitrix/oauth/callback", 1)[0] + "/bitrix/webhook"
+
+    if not handler_url:
+        raise HTTPException(status_code=400, detail="Укажите handler_url (путь обработчика)")
+
+    properties: Dict[str, Any] = {
+        "NAME": str(payload.get("name") or "Bot").strip() or "Bot",
+        "LAST_NAME": str(payload.get("last_name") or "").strip(),
+        "COLOR": str(payload.get("color") or "AQUA").strip() or "AQUA",
+        "EMAIL": str(payload.get("email") or "").strip(),
+        "WORK_POSITION": str(payload.get("work_position") or "").strip(),
+    }
+    properties = {k: v for k, v in properties.items() if v not in (None, "")}
+
+    register_payload: Dict[str, Any] = {
+        "CODE": str(payload.get("code") or f"bot_{uuid.uuid4().hex[:8]}").strip(),
+        "TYPE": str(payload.get("type") or "B").strip() or "B",
+        "EVENT_MESSAGE_ADD": handler_url,
+        "EVENT_WELCOME_MESSAGE": handler_url,
+    }
+    if properties:
+        register_payload["PROPERTIES"] = properties
+
+    api_result = await bitrix_api_call("imbot.register", register_payload)
+    bot_id = extract_bot_id_from_bitrix_result(api_result)
+    if bot_id:
+        bitrix["bot_id"] = bot_id
+
+    return {
+        "status": "registered",
+        "bot_id": bot_id,
+        "handler_url": handler_url,
+        "bitrix_result": api_result,
+    }
+
+
+@app.post("/bitrix/bot/update")
+async def bitrix_bot_update(payload: Dict[str, Any] = Body(default={})):  # noqa: B008
+    bitrix = runtime_config["bitrix"]
+    bot_id = str(payload.get("bot_id") or bitrix.get("bot_id") or "").strip()
+    if not bot_id:
+        raise HTTPException(status_code=400, detail="Укажите bot_id для обновления")
+
+    update_payload: Dict[str, Any] = {
+        "BOT_ID": bot_id,
+    }
+    if payload.get("name"):
+        update_payload["NAME"] = str(payload.get("name") or "").strip()
+    if payload.get("last_name"):
+        update_payload["LAST_NAME"] = str(payload.get("last_name") or "").strip()
+    if payload.get("color"):
+        update_payload["COLOR"] = str(payload.get("color") or "").strip()
+    if payload.get("work_position"):
+        update_payload["WORK_POSITION"] = str(payload.get("work_position") or "").strip()
+
+    api_result = await bitrix_api_call("imbot.update", update_payload)
+    bitrix["bot_id"] = bot_id
+    return {
+        "status": "updated",
+        "bot_id": bot_id,
+        "bitrix_result": api_result,
+    }
+
+
+async def handle_bot_command(dialog_id: str, text: str, *, send_to_bitrix: bool) -> Dict[str, Any]:
+    async def emit(message: str):
+        if send_to_bitrix:
+            await send_bitrix_message(dialog_id, message)
+
+    normalized = text.strip()
+    lower = normalized.lower()
+
+    if lower in {"/help", "help"}:
+        response_text = (
+            "Команды бота:\n"
+            "/help — помощь\n"
+            "/search <запрос> — поиск по документации + LLM\n"
+            "/price <запрос> — поиск по прайс-листу + LLM\n"
+            "/stock <запрос> — поиск только в наличии\n"
+            "/newchat — очистить контекст диалога\n"
+            "/clear — очистить контекст диалога"
+        )
+        await emit(response_text)
+        return {"status": "ok", "reply": response_text}
+
+    if lower in {"/newchat", "/clear"}:
+        chat_sessions[dialog_id] = []
+        response_text = "Контекст диалога очищен. Начинаем новый чат."
+        await emit(response_text)
+        return {"status": "ok", "reply": response_text}
+
+    if lower.startswith("/price"):
+        query_text = normalized[6:].strip()
+        if not query_text:
+            response_text = "Укажи запрос после команды: /price <что ищем>"
+            await emit(response_text)
+            return {"status": "ok", "reply": response_text}
+
+        bitrix_cfg = runtime_config["bitrix"]
+        collection_name = bitrix_cfg.get("collection_name", "my_collection") or "my_collection"
+        mode = bitrix_cfg.get("search_mode", "hybrid") or "hybrid"
+
+        try:
+            search_payload = await run_catalog_search(
+                query=query_text,
+                collection_name=collection_name,
+                only_in_stock=False,
+                mode=mode,
+            )
+            results = search_payload.get("results", [])
+            if not results:
+                response_text = "Ничего не найдено по прайс-листу."
+                await emit(response_text)
+                return {"status": "ok", "reply": response_text}
+
+            context = build_context_from_results(results, limit=5)
+            llm_answer = await polza_chat_completion(dialog_id, query_text, context)
+            response_text = f"{llm_answer}\n\nНайдено:\n{context}"
+            await emit(response_text[:3800])
+            return {"status": "ok", "reply": response_text}
+        except Exception as exc:
+            logger.error("/price processing failed: %s", exc, exc_info=True)
+            response_text = f"Ошибка обработки /price: {exc}"
+            await emit(response_text)
+            return {"status": "error", "reply": response_text}
+
+    if lower.startswith("/search"):
+        query_text = normalized[7:].strip()
+        if not query_text:
+            response_text = "Укажи запрос после команды: /search <что ищем в документации>"
+            await emit(response_text)
+            return {"status": "ok", "reply": response_text}
+
+        bitrix_cfg = runtime_config["bitrix"]
+        docs_collection_name = bitrix_cfg.get("docs_collection_name", "passports_collection") or "passports_collection"
+        mode = bitrix_cfg.get("search_mode", "hybrid") or "hybrid"
+
+        try:
+            search_payload = await run_catalog_search(
+                query=query_text,
+                collection_name=docs_collection_name,
+                only_in_stock=False,
+                mode=mode,
+            )
+            results = search_payload.get("results", [])
+            if not results:
+                response_text = "По документации ничего не найдено."
+                await emit(response_text)
+                return {"status": "ok", "reply": response_text}
+
+            context = build_docs_context(results, limit=5)
+            llm_answer = await polza_chat_completion(dialog_id, f"[docs] {query_text}", context)
+            response_text = f"{llm_answer}\n\nИсточники:\n{context}"
+            await emit(response_text[:3800])
+            return {"status": "ok", "reply": response_text}
+        except Exception as exc:
+            logger.error("/search processing failed: %s", exc, exc_info=True)
+            response_text = f"Ошибка обработки /search: {exc}"
+            await emit(response_text)
+            return {"status": "error", "reply": response_text}
+
+    if lower.startswith("/stock"):
+        query_text = normalized[6:].strip()
+        if not query_text:
+            response_text = "Укажи запрос после команды: /stock <артикул или наименование>"
+            await emit(response_text)
+            return {"status": "ok", "reply": response_text}
+
+        bitrix_cfg = runtime_config["bitrix"]
+        collection_name = bitrix_cfg.get("collection_name", "my_collection") or "my_collection"
+        mode = bitrix_cfg.get("search_mode", "hybrid") or "hybrid"
+
+        try:
+            search_payload = await run_catalog_search(
+                query=query_text,
+                collection_name=collection_name,
+                only_in_stock=True,
+                mode=mode,
+            )
+            results = search_payload.get("results", [])
+            if not results:
+                response_text = "По наличию ничего не найдено."
+                await emit(response_text)
+                return {"status": "ok", "reply": response_text}
+
+            context = build_context_from_results(results, limit=5)
+            llm_answer = await polza_chat_completion(dialog_id, f"[stock] {query_text}", context)
+            response_text = f"{llm_answer}\n\nВ наличии:\n{context}"
+            await emit(response_text[:3800])
+            return {"status": "ok", "reply": response_text}
+        except Exception as exc:
+            logger.error("/stock processing failed: %s", exc, exc_info=True)
+            response_text = f"Ошибка обработки /stock: {exc}"
+            await emit(response_text)
+            return {"status": "error", "reply": response_text}
+
+    response_text = "Неизвестная команда. Используй /help"
+    await emit(response_text)
+    return {"status": "ok", "reply": response_text}
+
+
+@app.post("/bitrix/test_chat")
+async def bitrix_test_chat(payload: Dict[str, Any] = Body(default={})):  # noqa: B008
+    dialog_id = str(payload.get("dialog_id") or "web-test-dialog").strip() or "web-test-dialog"
+    message = str(payload.get("message") or "").strip()
+    if not message:
+        raise HTTPException(status_code=400, detail="Укажите message")
+    return await handle_bot_command(dialog_id, message, send_to_bitrix=False)
+
+
 def build_docs_context(results: List[Any], limit: int = 5) -> str:
     lines = []
     for idx, point in enumerate(results[:limit], start=1):
@@ -1747,137 +1978,7 @@ async def bitrix_webhook(payload: Dict[str, Any] = Body(default={})):  # noqa: B
 
     if not text:
         return {"status": "ignored", "reason": "empty message"}
-
-    normalized = text.strip()
-    lower = normalized.lower()
-
-    if lower in {"/help", "help"}:
-        response_text = (
-            "Команды бота:\n"
-            "/help — помощь\n"
-            "/search <запрос> — поиск по документации + LLM\n"
-            "/price <запрос> — поиск по прайс-листу + LLM\n"
-            "/stock <запрос> — поиск только в наличии\n"
-            "/newchat — очистить контекст диалога\n"
-            "/clear — очистить контекст диалога"
-        )
-        await send_bitrix_message(dialog_id, response_text)
-        return {"status": "ok", "reply": response_text}
-
-    if lower in {"/newchat", "/clear"}:
-        chat_sessions[dialog_id] = []
-        response_text = "Контекст диалога очищен. Начинаем новый чат."
-        await send_bitrix_message(dialog_id, response_text)
-        return {"status": "ok", "reply": response_text}
-
-    if lower.startswith("/price"):
-        query_text = normalized[6:].strip()
-        if not query_text:
-            response_text = "Укажи запрос после команды: /price <что ищем>"
-            await send_bitrix_message(dialog_id, response_text)
-            return {"status": "ok", "reply": response_text}
-
-        bitrix_cfg = runtime_config["bitrix"]
-        collection_name = bitrix_cfg.get("collection_name", "my_collection") or "my_collection"
-        mode = bitrix_cfg.get("search_mode", "hybrid") or "hybrid"
-
-        try:
-            search_payload = await run_catalog_search(
-                query=query_text,
-                collection_name=collection_name,
-                only_in_stock=False,
-                mode=mode,
-            )
-            results = search_payload.get("results", [])
-            if not results:
-                response_text = "Ничего не найдено по прайс-листу."
-                await send_bitrix_message(dialog_id, response_text)
-                return {"status": "ok", "reply": response_text}
-
-            context = build_context_from_results(results, limit=5)
-            llm_answer = await polza_chat_completion(dialog_id, query_text, context)
-            response_text = f"{llm_answer}\n\nНайдено:\n{context}"
-            await send_bitrix_message(dialog_id, response_text[:3800])
-            return {"status": "ok", "reply": response_text}
-        except Exception as exc:
-            logger.error("/price processing failed: %s", exc, exc_info=True)
-            response_text = f"Ошибка обработки /price: {exc}"
-            await send_bitrix_message(dialog_id, response_text)
-            return {"status": "error", "reply": response_text}
-
-    if lower.startswith("/search"):
-        query_text = normalized[7:].strip()
-        if not query_text:
-            response_text = "Укажи запрос после команды: /search <что ищем в документации>"
-            await send_bitrix_message(dialog_id, response_text)
-            return {"status": "ok", "reply": response_text}
-
-        bitrix_cfg = runtime_config["bitrix"]
-        docs_collection_name = bitrix_cfg.get("docs_collection_name", "passports_collection") or "passports_collection"
-        mode = bitrix_cfg.get("search_mode", "hybrid") or "hybrid"
-
-        try:
-            search_payload = await run_catalog_search(
-                query=query_text,
-                collection_name=docs_collection_name,
-                only_in_stock=False,
-                mode=mode,
-            )
-            results = search_payload.get("results", [])
-            if not results:
-                response_text = "По документации ничего не найдено."
-                await send_bitrix_message(dialog_id, response_text)
-                return {"status": "ok", "reply": response_text}
-
-            context = build_docs_context(results, limit=5)
-            llm_answer = await polza_chat_completion(dialog_id, f"[docs] {query_text}", context)
-            response_text = f"{llm_answer}\n\nИсточники:\n{context}"
-            await send_bitrix_message(dialog_id, response_text[:3800])
-            return {"status": "ok", "reply": response_text}
-        except Exception as exc:
-            logger.error("/search processing failed: %s", exc, exc_info=True)
-            response_text = f"Ошибка обработки /search: {exc}"
-            await send_bitrix_message(dialog_id, response_text)
-            return {"status": "error", "reply": response_text}
-
-    if lower.startswith("/stock"):
-        query_text = normalized[6:].strip()
-        if not query_text:
-            response_text = "Укажи запрос после команды: /stock <артикул или наименование>"
-            await send_bitrix_message(dialog_id, response_text)
-            return {"status": "ok", "reply": response_text}
-
-        bitrix_cfg = runtime_config["bitrix"]
-        collection_name = bitrix_cfg.get("collection_name", "my_collection") or "my_collection"
-        mode = bitrix_cfg.get("search_mode", "hybrid") or "hybrid"
-
-        try:
-            search_payload = await run_catalog_search(
-                query=query_text,
-                collection_name=collection_name,
-                only_in_stock=True,
-                mode=mode,
-            )
-            results = search_payload.get("results", [])
-            if not results:
-                response_text = "По наличию ничего не найдено."
-                await send_bitrix_message(dialog_id, response_text)
-                return {"status": "ok", "reply": response_text}
-
-            context = build_context_from_results(results, limit=5)
-            llm_answer = await polza_chat_completion(dialog_id, f"[stock] {query_text}", context)
-            response_text = f"{llm_answer}\n\nВ наличии:\n{context}"
-            await send_bitrix_message(dialog_id, response_text[:3800])
-            return {"status": "ok", "reply": response_text}
-        except Exception as exc:
-            logger.error("/stock processing failed: %s", exc, exc_info=True)
-            response_text = f"Ошибка обработки /stock: {exc}"
-            await send_bitrix_message(dialog_id, response_text)
-            return {"status": "error", "reply": response_text}
-
-    response_text = "Неизвестная команда. Используй /help"
-    await send_bitrix_message(dialog_id, response_text)
-    return {"status": "ok", "reply": response_text}
+    return await handle_bot_command(dialog_id, text, send_to_bitrix=True)
 
 @app.get("/search")
 async def search(
