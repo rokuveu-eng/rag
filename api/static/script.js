@@ -1,305 +1,8 @@
-const processButton = document.getElementById('process-file');
-const uploadButton = document.getElementById('upload-data');
-const statusText = document.getElementById('status-text');
-const progressFill = document.getElementById('progress-fill');
-const logOutput = document.getElementById('log-output');
-const sheetSelect = document.getElementById('sheet-name');
-let cachedWorkbook = null;
-let cachedFileBuffer = null;
-const mainRequiredColumns = ['Артикул', 'Наименование', 'Тариф с НДС, руб'];
-
-const stockProcessButton = document.getElementById('stock-process-file');
-const stockUploadButton = document.getElementById('stock-upload-data');
-const stockStatusText = document.getElementById('stock-status-text');
-const stockProgressFill = document.getElementById('stock-progress-fill');
-const stockLogOutput = document.getElementById('stock-log-output');
-
-const deleteCollectionButton = document.getElementById('delete-collection-button');
-const deleteStatusText = document.getElementById('delete-status-text');
-const deleteLogOutput = document.getElementById('delete-log-output');
-
-const passportsUploadButton = document.getElementById('passports-upload-button');
-const passportsStatusText = document.getElementById('passports-status-text');
-const passportsLogOutput = document.getElementById('passports-log-output');
-const passportsSearchButton = document.getElementById('passports-search-button');
-const passportsSearchStatus = document.getElementById('passports-search-status');
-const passportsSearchOutput = document.getElementById('passports-search-output');
-
-const hfCacheRefreshButton = document.getElementById('hf-cache-refresh');
-const hfCacheClearButton = document.getElementById('hf-cache-clear');
-const hfCacheStatus = document.getElementById('hf-cache-status');
-const hfCacheLog = document.getElementById('hf-cache-log');
-const hfHomePath = document.getElementById('hf-home-path');
-const hfHubCachePath = document.getElementById('hf-hub-cache-path');
-const hfCacheSize = document.getElementById('hf-cache-size');
-const hfCacheFiles = document.getElementById('hf-cache-files');
-
-const mainSearchButton = document.getElementById('main-search-button');
-const mainSearchStatus = document.getElementById('main-search-status');
-const mainSearchOutput = document.getElementById('main-search-output');
-
-const integrationsRefreshButton = document.getElementById('integrations-refresh');
-const integrationsSaveButton = document.getElementById('integrations-save');
-const bitrixOauthConnectButton = document.getElementById('bitrix-oauth-connect');
-const bitrixOauthRefreshButton = document.getElementById('bitrix-oauth-refresh');
-const bitrixOauthStatusButton = document.getElementById('bitrix-oauth-status');
-const integrationsStatus = document.getElementById('integrations-status');
-const integrationsLog = document.getElementById('integrations-log');
-
-const botToolsRegisterButton = document.getElementById('bot-tools-register');
-const botToolsUpdateButton = document.getElementById('bot-tools-update');
-const botToolsStatus = document.getElementById('bot-tools-status');
-const botToolsLog = document.getElementById('bot-tools-log');
-
-const webChatSendButton = document.getElementById('web-chat-send');
-const webChatStatus = document.getElementById('web-chat-status');
-const webChatLog = document.getElementById('web-chat-log');
-
-const setStatus = (message) => {
-    statusText.textContent = `Статус: ${message}`;
-};
-
-const addLog = (message) => {
-    const timestamp = new Date().toLocaleTimeString();
-    logOutput.textContent = `[${timestamp}] ${message}\n` + logOutput.textContent;
-};
-
-const setProgress = (value) => {
-    const safeValue = Math.max(0, Math.min(100, value));
-    progressFill.style.width = `${safeValue}%`;
-};
-
-const setStockStatus = (message) => {
-    stockStatusText.textContent = `Статус: ${message}`;
-};
-
-const addStockLog = (message) => {
-    const timestamp = new Date().toLocaleTimeString();
-    stockLogOutput.textContent = `[${timestamp}] ${message}\n` + stockLogOutput.textContent;
-};
-
-const setStockProgress = (value) => {
-    const safeValue = Math.max(0, Math.min(100, value));
-    stockProgressFill.style.width = `${safeValue}%`;
-};
-
-const setDeleteStatus = (message) => {
-    if (!deleteStatusText) {
-        return;
-    }
-    deleteStatusText.textContent = `Статус: ${message}`;
-};
-
-const addDeleteLog = (message) => {
-    if (!deleteLogOutput) {
-        return;
-    }
-    const timestamp = new Date().toLocaleTimeString();
-    deleteLogOutput.textContent = `[${timestamp}] ${message}\n` + deleteLogOutput.textContent;
-};
-
-const setPassportsStatus = (message) => {
-    if (!passportsStatusText) {
-        return;
-    }
-    passportsStatusText.textContent = `Статус: ${message}`;
-};
-
-const addPassportsLog = (message) => {
-    if (!passportsLogOutput) {
-        return;
-    }
-    const timestamp = new Date().toLocaleTimeString();
-    passportsLogOutput.textContent = `[${timestamp}] ${message}\n` + passportsLogOutput.textContent;
-};
-
-const setPassportsSearchStatus = (message) => {
-    if (!passportsSearchStatus) {
-        return;
-    }
-    passportsSearchStatus.textContent = `Статус: ${message}`;
-};
-
-const setPassportsSearchOutput = (message) => {
-    if (!passportsSearchOutput) {
-        return;
-    }
-    passportsSearchOutput.textContent = message;
-};
-
-const setHfCacheStatus = (message) => {
-    if (!hfCacheStatus) {
-        return;
-    }
-    hfCacheStatus.textContent = `Статус: ${message}`;
-};
-
-const setMainSearchStatus = (message) => {
-    if (!mainSearchStatus) {
-        return;
-    }
-    mainSearchStatus.textContent = `Статус: ${message}`;
-};
-
-const setMainSearchOutput = (message) => {
-    if (!mainSearchOutput) {
-        return;
-    }
-    mainSearchOutput.textContent = message;
-};
-
-const setIntegrationsStatus = (message) => {
-    if (!integrationsStatus) {
-        return;
-    }
-    integrationsStatus.textContent = `Статус: ${message}`;
-};
-
-const addIntegrationsLog = (message) => {
-    if (!integrationsLog) {
-        return;
-    }
-    const timestamp = new Date().toLocaleTimeString();
-    integrationsLog.textContent = `[${timestamp}] ${message}\n` + integrationsLog.textContent;
-};
-
-const setBotToolsStatus = (message) => {
-    if (!botToolsStatus) {
-        return;
-    }
-    botToolsStatus.textContent = `Статус: ${message}`;
-};
-
-const addBotToolsLog = (message) => {
-    if (!botToolsLog) {
-        return;
-    }
-    const timestamp = new Date().toLocaleTimeString();
-    botToolsLog.textContent = `[${timestamp}] ${message}\n` + botToolsLog.textContent;
-};
-
-const setWebChatStatus = (message) => {
-    if (!webChatStatus) {
-        return;
-    }
-    webChatStatus.textContent = `Статус: ${message}`;
-};
-
-const addWebChatLog = (message) => {
-    if (!webChatLog) {
-        return;
-    }
-    const timestamp = new Date().toLocaleTimeString();
-    webChatLog.textContent = `[${timestamp}] ${message}\n` + webChatLog.textContent;
-};
-
-const extractHttpError = async (response, fallbackMessage) => {
-    let detail = '';
-    try {
-        const payload = await response.json();
-        detail = payload?.detail || payload?.error_description || payload?.error || '';
-    } catch {
-        try {
-            detail = (await response.text()) || '';
-        } catch {
-            detail = '';
-        }
-    }
-
-    const suffix = detail ? `: ${detail}` : '';
-    return `${fallbackMessage} (HTTP ${response.status})${suffix}`;
-};
-
-const renderRuntimeConfig = (payload) => {
-    const polza = payload?.polza || {};
-    const bitrix = payload?.bitrix || {};
-
-    const polzaApiKeyMasked = document.getElementById('polza-api-key-masked');
-    const polzaModel = document.getElementById('polza-model');
-    const polzaTemperature = document.getElementById('polza-temperature');
-    const polzaMaxTokens = document.getElementById('polza-max-tokens');
-    const polzaBaseUrl = document.getElementById('polza-base-url');
-
-    const bitrixClientId = document.getElementById('bitrix-client-id');
-    const bitrixClientSecretMasked = document.getElementById('bitrix-client-secret-masked');
-    const bitrixRedirectUri = document.getElementById('bitrix-redirect-uri');
-    const bitrixWebhookUrl = document.getElementById('bitrix-webhook-url');
-    const bitrixPortalBaseUrl = document.getElementById('bitrix-portal-base-url');
-    const bitrixOauthAuthUrl = document.getElementById('bitrix-oauth-auth-url');
-    const bitrixOauthTokenUrl = document.getElementById('bitrix-oauth-token-url');
-    const bitrixBotId = document.getElementById('bitrix-bot-id');
-    const bitrixCollectionName = document.getElementById('bitrix-collection-name');
-    const bitrixDocsCollectionName = document.getElementById('bitrix-docs-collection-name');
-    const bitrixSearchMode = document.getElementById('bitrix-search-mode');
-    const botToolsBotId = document.getElementById('bot-tools-bot-id');
-    const botToolsHandlerUrl = document.getElementById('bot-tools-handler-url');
-
-    if (polzaApiKeyMasked) polzaApiKeyMasked.value = polza.api_key_masked || '';
-    if (polzaModel) polzaModel.value = polza.model || 'openai/gpt-4o';
-    if (polzaTemperature) polzaTemperature.value = polza.temperature ?? 0.2;
-    if (polzaMaxTokens) polzaMaxTokens.value = polza.max_tokens ?? 500;
-    if (polzaBaseUrl) polzaBaseUrl.value = polza.base_url || 'https://polza.ai/api/v1/chat/completions';
-
-    if (bitrixClientId) bitrixClientId.value = bitrix.client_id || '';
-    if (bitrixClientSecretMasked) bitrixClientSecretMasked.value = bitrix.client_secret_masked || '';
-    if (bitrixRedirectUri) bitrixRedirectUri.value = bitrix.redirect_uri || '';
-    if (bitrixWebhookUrl) bitrixWebhookUrl.value = bitrix.webhook_url || '';
-    if (bitrixPortalBaseUrl) bitrixPortalBaseUrl.value = bitrix.portal_base_url || '';
-    if (bitrixOauthAuthUrl) bitrixOauthAuthUrl.value = bitrix.oauth_auth_url || 'https://oauth.bitrix.info/oauth/authorize/';
-    if (bitrixOauthTokenUrl) bitrixOauthTokenUrl.value = bitrix.oauth_token_url || 'https://oauth.bitrix.info/oauth/token/';
-    if (bitrixBotId) bitrixBotId.value = bitrix.bot_id || '';
-    if (bitrixCollectionName) bitrixCollectionName.value = bitrix.collection_name || 'my_collection';
-    if (bitrixDocsCollectionName) bitrixDocsCollectionName.value = bitrix.docs_collection_name || 'passports_collection';
-    if (bitrixSearchMode) bitrixSearchMode.value = bitrix.search_mode || 'hybrid';
-    if (botToolsBotId) botToolsBotId.value = bitrix.bot_id || '';
-    if (botToolsHandlerUrl && !botToolsHandlerUrl.value) {
-        const redirectUri = bitrix.redirect_uri || '';
-        if (redirectUri.includes('/bitrix/oauth/callback')) {
-            botToolsHandlerUrl.value = redirectUri.replace('/bitrix/oauth/callback', '/bitrix/webhook');
-        }
-    }
-
-    if (bitrix.oauth_connected) {
-        addIntegrationsLog(
-            `OAuth подключен. portal=${bitrix.portal_base_url || 'n/a'}, token=${bitrix.access_token_masked || '***'}`
-        );
-    }
-};
-
-const loadRuntimeConfig = async () => {
-    const response = await fetch('/runtime_config');
-    if (!response.ok) {
-        const payload = await response.json().catch(() => ({}));
-        throw new Error(payload.detail || 'Не удалось получить runtime_config');
-    }
-    return response.json();
-};
-
-const addHfCacheLog = (message) => {
-    if (!hfCacheLog) {
-        return;
-    }
-    const timestamp = new Date().toLocaleTimeString();
-    hfCacheLog.textContent = `[${timestamp}] ${message}\n` + hfCacheLog.textContent;
-};
-
-const renderHfCacheInfo = (payload) => {
-    if (hfHomePath) {
-        hfHomePath.value = payload.hf_home || '';
-    }
-    if (hfHubCachePath) {
-        hfHubCachePath.value = payload.hf_hub_cache || '';
-    }
-    if (hfCacheSize) {
-        hfCacheSize.value = (payload.size_mb ?? 0).toString();
-    }
-    if (hfCacheFiles) {
-        hfCacheFiles.value = (payload.file_count ?? 0).toString();
-    }
-};
-
 const tabButtons = document.querySelectorAll('.tab-button');
 const tabContents = document.querySelectorAll('.tab-content');
+
+const DEFAULT_TIMEOUT_MS = 45000;
+const LOG_MAX_LINES = 200;
 
 const switchTab = (tabName) => {
     tabButtons.forEach((button) => {
@@ -310,30 +13,289 @@ const switchTab = (tabName) => {
     });
 };
 
-if (tabButtons.length) {
-    tabButtons.forEach((button) => {
-        button.addEventListener('click', () => switchTab(button.dataset.tab));
+tabButtons.forEach((button) => {
+    button.addEventListener('click', () => switchTab(button.dataset.tab));
+});
+
+const setStatus = (el, text) => {
+    if (el) el.textContent = `Статус: ${text}`;
+};
+
+const setProgress = (el, value) => {
+    if (!el) return;
+    const safe = Math.max(0, Math.min(100, value));
+    el.style.width = `${safe}%`;
+};
+
+const addLog = (el, text) => {
+    if (!el) return;
+    const t = new Date().toLocaleTimeString();
+    const next = `[${t}] ${text}`;
+    const prev = (el.textContent || '').split('\n').filter(Boolean);
+    const merged = [next, ...prev].slice(0, LOG_MAX_LINES);
+    el.textContent = `${merged.join('\n')}${merged.length ? '\n' : ''}`;
+};
+
+const fetchJson = async (url, options = {}, timeoutMs = DEFAULT_TIMEOUT_MS) => {
+    const timeoutController = new AbortController();
+    const externalSignal = options.signal;
+    if (externalSignal) {
+        externalSignal.addEventListener('abort', () => timeoutController.abort(), { once: true });
+    }
+
+    const timer = setTimeout(() => timeoutController.abort(), timeoutMs);
+
+    try {
+        const response = await fetch(url, { ...options, signal: timeoutController.signal });
+        let payload = null;
+        try {
+            payload = await response.json();
+        } catch {
+            payload = null;
+        }
+
+        if (!response.ok) {
+            throw new Error(payload?.detail || payload?.message || `HTTP ${response.status}`);
+        }
+
+        return payload;
+    } catch (e) {
+        if (e?.name === 'AbortError') {
+            throw new Error('Превышено время ожидания запроса');
+        }
+        throw e;
+    } finally {
+        clearTimeout(timer);
+    }
+};
+
+const mainRequiredColumns = ['Артикул', 'Наименование', 'Тариф с НДС, руб'];
+
+const processButton = document.getElementById('process-file');
+const uploadButton = document.getElementById('upload-data');
+const statusText = document.getElementById('status-text');
+const progressFill = document.getElementById('progress-fill');
+const logOutput = document.getElementById('log-output');
+const sheetSelect = document.getElementById('sheet-name');
+
+const stockProcessButton = document.getElementById('stock-process-file');
+const stockUploadButton = document.getElementById('stock-upload-data');
+const stockStatusText = document.getElementById('stock-status-text');
+const stockProgressFill = document.getElementById('stock-progress-fill');
+const stockLogOutput = document.getElementById('stock-log-output');
+
+const passportsUploadButton = document.getElementById('passports-upload-button');
+const passportsStatusText = document.getElementById('passports-status-text');
+const passportsLogOutput = document.getElementById('passports-log-output');
+const passportsSearchButton = document.getElementById('passports-search-button');
+const passportsSearchStatus = document.getElementById('passports-search-status');
+const passportsSearchOutput = document.getElementById('passports-search-output');
+
+const deleteCollectionButton = document.getElementById('delete-collection-button');
+const deleteStatusText = document.getElementById('delete-status-text');
+const deleteLogOutput = document.getElementById('delete-log-output');
+
+const mainSearchButton = document.getElementById('main-search-button');
+const mainSearchStatus = document.getElementById('main-search-status');
+const mainSearchOutput = document.getElementById('main-search-output');
+const mainSearchDebug = document.getElementById('main-search-debug');
+
+const aiEndpointInput = document.getElementById('ai-endpoint');
+const aiModelInput = document.getElementById('ai-model');
+const aiApiKeyInput = document.getElementById('ai-api-key');
+const orchestratorUrlInput = document.getElementById('orchestrator-url');
+const aiCollectionNameInput = document.getElementById('ai-collection-name');
+const aiProbableLimitInput = document.getElementById('ai-probable-limit');
+const aiSaveSettingsButton = document.getElementById('ai-save-settings');
+const aiSettingsStatus = document.getElementById('ai-settings-status');
+const aiMessageInput = document.getElementById('ai-message');
+const aiSendChatButton = document.getElementById('ai-send-chat');
+const aiSendSpecButton = document.getElementById('ai-send-spec');
+const aiChatStatus = document.getElementById('ai-chat-status');
+const aiChatOutput = document.getElementById('ai-chat-output');
+
+const xlsxFileInput = document.getElementById('xlsx-file');
+const skipRowsInput = document.getElementById('skip-rows');
+const collectionNameInput = document.getElementById('collection-name');
+const batchSizeInput = document.getElementById('batch-size');
+const pointsBatchSizeInput = document.getElementById('points-batch-size');
+const articleModeInput = document.getElementById('article-mode');
+
+const stockXlsxFileInput = document.getElementById('stock-xlsx-file');
+const stockSkipRowsInput = document.getElementById('stock-skip-rows');
+const stockCollectionNameInput = document.getElementById('stock-collection-name');
+const stockBatchSizeInput = document.getElementById('stock-batch-size');
+
+const passportsFilesInput = document.getElementById('passports-files');
+const passportsCollectionInput = document.getElementById('passports-collection-name');
+const passportsBatchSizeInput = document.getElementById('passports-batch-size');
+const passportsPointsBatchSizeInput = document.getElementById('passports-points-batch-size');
+const passportsSearchQueryInput = document.getElementById('passports-search-query');
+const passportsSearchLimitInput = document.getElementById('passports-search-limit');
+
+const mainSearchQueryInput = document.getElementById('main-search-query');
+const mainSearchModeInput = document.getElementById('main-search-mode');
+const mainSearchInStockInput = document.getElementById('main-search-in-stock');
+const mainSearchLimitInput = document.getElementById('main-search-limit');
+const mainSearchCandidateLimitInput = document.getElementById('main-search-candidate-limit');
+const deleteCollectionNameInput = document.getElementById('delete-collection-name');
+
+let mainSearchController = null;
+let aiRequestController = null;
+
+let cachedWorkbook = null;
+
+const aiSettingsKey = 'orchestrator_ai_settings_v1';
+
+const defaultAiSettings = {
+    ai_endpoint: 'https://polza.ai/api/v1',
+    ai_model: 'openai/gpt-4o',
+    ai_api_key: '',
+    orchestrator_url: 'http://localhost:8430',
+    collection_name: 'CHINT',
+    probable_limit: 3,
+};
+
+const syncCollectionInputs = (name) => {
+    if (!name) return;
+    const ids = ['collection-name', 'stock-collection-name', 'delete-collection-name', 'ai-collection-name'];
+    ids.forEach((id) => {
+        const el = document.getElementById(id);
+        if (el && !el.value) el.value = name;
     });
-}
+};
 
-const renderMainMappings = (headers) => {
-    const columnMappingsDiv = document.getElementById('column-mappings');
-    columnMappingsDiv.innerHTML = '';
+const preloadCollectionName = async () => {
+    try {
+        const payload = await fetchJson('/collections');
+        const names = payload.collections || [];
+        if (!names.length) return;
+        const preferred = names.includes('CHINT') ? 'CHINT' : names[0];
+        syncCollectionInputs(preferred);
+    } catch {
+        // ignore preload errors
+    }
+};
 
-    mainRequiredColumns.forEach(requiredCol => {
+const getAiSettingsFromForm = () => ({
+    ai_endpoint: aiEndpointInput?.value?.trim() || defaultAiSettings.ai_endpoint,
+    ai_model: aiModelInput?.value?.trim() || defaultAiSettings.ai_model,
+    ai_api_key: aiApiKeyInput?.value?.trim() || '',
+    orchestrator_url: orchestratorUrlInput?.value?.trim() || defaultAiSettings.orchestrator_url,
+    collection_name: aiCollectionNameInput?.value?.trim() || defaultAiSettings.collection_name,
+    probable_limit: Math.max(1, Math.min(10, parseInt(aiProbableLimitInput?.value || '3', 10) || 3)),
+});
+
+const applyAiSettingsToForm = (settings) => {
+    if (aiEndpointInput) aiEndpointInput.value = settings.ai_endpoint || defaultAiSettings.ai_endpoint;
+    if (aiModelInput) aiModelInput.value = settings.ai_model || defaultAiSettings.ai_model;
+    if (aiApiKeyInput) aiApiKeyInput.value = settings.ai_api_key || '';
+    if (orchestratorUrlInput) orchestratorUrlInput.value = settings.orchestrator_url || defaultAiSettings.orchestrator_url;
+    if (aiCollectionNameInput) aiCollectionNameInput.value = settings.collection_name || defaultAiSettings.collection_name;
+    if (aiProbableLimitInput) aiProbableLimitInput.value = String(settings.probable_limit || defaultAiSettings.probable_limit);
+};
+
+const loadAiSettings = () => {
+    try {
+        const raw = localStorage.getItem(aiSettingsKey);
+        if (!raw) {
+            applyAiSettingsToForm(defaultAiSettings);
+            return;
+        }
+        const parsed = JSON.parse(raw);
+        applyAiSettingsToForm({ ...defaultAiSettings, ...parsed });
+    } catch {
+        applyAiSettingsToForm(defaultAiSettings);
+    }
+};
+
+const saveAiSettings = () => {
+    const settings = getAiSettingsFromForm();
+    localStorage.setItem(aiSettingsKey, JSON.stringify(settings));
+    return settings;
+};
+
+const renderAiResponse = (payload, settings) => {
+    const lines = [];
+    lines.push(payload.reply_text || 'Пустой ответ');
+
+    if (Array.isArray(payload.rows) && payload.rows.length) {
+        lines.push('');
+        lines.push('Rows breakdown:');
+        payload.rows.forEach((row, idx) => {
+            lines.push(`${idx + 1}) ${row.query_text || 'n/a'}`);
+            lines.push(`   score: ${row.score ?? 'n/a'} | score_norm: ${row.score_norm ?? 'n/a'}`);
+            lines.push(`   dense: ${(row.dense_top || []).join(' ; ') || 'нет'}`);
+            lines.push(`   sparse: ${(row.sparse_top || []).join(' ; ') || 'нет'}`);
+            lines.push(`   hybrid: ${(row.hybrid_top || []).join(' ; ') || 'нет'}`);
+        });
+    }
+
+    if (payload.spec_download_url) {
+        const url = `${(settings.orchestrator_url || '').replace(/\/$/, '')}${payload.spec_download_url}`;
+        lines.push('');
+        lines.push(`Скачать спецификацию: ${url}`);
+    }
+    if (payload.debug) {
+        lines.push('');
+        lines.push('Debug:');
+        lines.push(JSON.stringify(payload.debug, null, 2));
+    }
+    return lines.join('\n');
+};
+
+const sendAiRequest = async (path) => {
+    const message = aiMessageInput?.value?.trim();
+    if (!message) return alert('Введите сообщение для AI');
+
+    const settings = saveAiSettings();
+    const orchestratorBase = (settings.orchestrator_url || '').replace(/\/$/, '');
+    if (!orchestratorBase) return alert('Укажите Orchestrator URL');
+
+    try {
+        if (aiRequestController) aiRequestController.abort();
+        aiRequestController = new AbortController();
+        setStatus(aiChatStatus, 'отправка запроса...');
+        const payload = await fetchJson(`${orchestratorBase}${path}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            signal: aiRequestController.signal,
+            body: JSON.stringify({
+                message,
+                collection_name: settings.collection_name,
+                ai_base_url: settings.ai_endpoint,
+                ai_api_key: settings.ai_api_key,
+                ai_model: settings.ai_model,
+                probable_limit: settings.probable_limit,
+            }),
+        }, 90000);
+
+        aiChatOutput.textContent = renderAiResponse(payload, settings);
+        setStatus(aiChatStatus, 'готово');
+    } catch (e) {
+        setStatus(aiChatStatus, 'ошибка');
+        aiChatOutput.textContent = `Ошибка: ${e.message}`;
+        alert(e.message);
+    } finally {
+        aiRequestController = null;
+    }
+};
+
+const renderMappings = (containerId, requiredColumns, headers, prefix = '') => {
+    const container = document.getElementById(containerId);
+    container.innerHTML = '';
+    requiredColumns.forEach((requiredCol) => {
         const row = document.createElement('div');
         row.className = 'mapping-row';
-
         const label = document.createElement('label');
         label.textContent = requiredCol;
-
         const select = document.createElement('select');
-        select.id = `select-${requiredCol}`;
+        select.id = `${prefix}select-${requiredCol}`;
 
-        const defaultOption = document.createElement('option');
-        defaultOption.value = '';
-        defaultOption.textContent = `Выберите столбец для "${requiredCol}"`;
-        select.appendChild(defaultOption);
+        const def = document.createElement('option');
+        def.value = '';
+        def.textContent = `Выберите столбец для "${requiredCol}"`;
+        select.appendChild(def);
 
         headers.forEach((header, index) => {
             const option = document.createElement('option');
@@ -344,1084 +306,352 @@ const renderMainMappings = (headers) => {
 
         row.appendChild(label);
         row.appendChild(select);
-        columnMappingsDiv.appendChild(row);
+        container.appendChild(row);
     });
 };
 
-const updateMainSheetMappings = () => {
-    if (!cachedWorkbook) {
-        return;
+const pollJob = async (url, onProgress) => {
+    let done = false;
+    while (!done) {
+        await new Promise((r) => setTimeout(r, 1500));
+        const status = await fetchJson(url);
+        onProgress(status);
+        if (status.status === 'failed') throw new Error(status.error || 'Ошибка обработки');
+        if (status.status === 'completed') done = true;
     }
-    const skipRows = parseInt(document.getElementById('skip-rows').value, 10) || 0;
-    const selectedSheet = sheetSelect.value || cachedWorkbook.SheetNames[0];
-    const worksheet = cachedWorkbook.Sheets[selectedSheet];
-    if (!worksheet) {
-        return;
-    }
-    const json = XLSX.utils.sheet_to_json(worksheet, { header: 1 });
-    const headers = json[skipRows] || [];
-    renderMainMappings(headers);
 };
 
-sheetSelect.addEventListener('change', () => {
-    updateMainSheetMappings();
-});
-
-processButton.addEventListener('click', () => {
-    const fileInput = document.getElementById('xlsx-file');
-    const skipRows = parseInt(document.getElementById('skip-rows').value, 10);
-
-    if (fileInput.files.length === 0) {
-        alert('Пожалуйста, выберите файл.');
-        return;
+const renderMainSearchOutput = (results = [], debug = null) => {
+    const lines = [];
+    if (!results.length) {
+        return 'Ничего не найдено';
     }
 
-    const file = fileInput.files[0];
-    const reader = new FileReader();
+    lines.push('Результаты:');
+    lines.push(
+        results
+            .map((r, i) => `#${i + 1}\nscore: ${r.score ?? 'n/a'}\npayload: ${JSON.stringify(r.payload || {}, null, 2)}\n`)
+            .join('\n')
+    );
 
-    setStatus('чтение файла...');
-    setProgress(5);
-
-    reader.onprogress = function(event) {
-        if (event.lengthComputable) {
-            const percent = Math.round((event.loaded / event.total) * 40);
-            setProgress(percent);
-        }
-    };
-
-    reader.onload = function(e) {
-        setStatus('обработка заголовков...');
-        setProgress(55);
-
-        const data = new Uint8Array(e.target.result);
-        const workbook = XLSX.read(data, {type: 'array'});
-        cachedWorkbook = workbook;
-        cachedFileBuffer = data;
-        const sheetNames = workbook.SheetNames || [];
-
-        sheetSelect.innerHTML = '';
-        if (!sheetNames.length) {
-            sheetSelect.disabled = true;
-            sheetSelect.innerHTML = '<option value="">Листы не найдены</option>';
-            setStatus('листов не найдено');
-            setProgress(0);
-            return;
-        }
-
-        sheetNames.forEach((name, index) => {
-            const option = document.createElement('option');
-            option.value = name;
-            option.textContent = name;
-            if (index === 0) {
-                option.selected = true;
+    const breakdown = debug?.score_trace?.breakdown;
+    if (breakdown) {
+        const block = (title, arr = []) => {
+            lines.push('');
+            lines.push(`${title}:`);
+            if (!arr.length) {
+                lines.push('  нет');
+                return;
             }
-            sheetSelect.appendChild(option);
-        });
-        sheetSelect.disabled = false;
-
-        updateMainSheetMappings();
-
-        uploadButton.style.display = 'inline-flex';
-        setStatus('готово к загрузке. Настройте маппинг.');
-        setProgress(70);
-    };
-
-    reader.onerror = function() {
-        setStatus('ошибка чтения файла');
-        setProgress(0);
-    };
-
-    reader.readAsArrayBuffer(file);
-});
-
-uploadButton.addEventListener('click', async () => {
-    const fileInput = document.getElementById('xlsx-file');
-    const skipRows = parseInt(document.getElementById('skip-rows').value, 10);
-    const batchSize = parseInt(document.getElementById('batch-size').value, 10);
-    const pointsBatchSize = parseInt(document.getElementById('points-batch-size').value, 10);
-    const file = fileInput.files[0];
-    const collectionName = document.getElementById('collection-name').value;
-    const articleMode = document.getElementById('article-mode').value;
-    const sheetName = sheetSelect ? sheetSelect.value : '';
-
-    if (!file) {
-        alert('Пожалуйста, выберите файл.');
-        return;
-    }
-
-    const mappings = {};
-    const requiredColumns = mainRequiredColumns;
-    requiredColumns.forEach(requiredCol => {
-        const selectedIndex = document.getElementById(`select-${requiredCol}`).value;
-        if (selectedIndex !== '') {
-            mappings[requiredCol] = parseInt(selectedIndex, 10);
-        }
-    });
-
-    if (Object.keys(mappings).length !== requiredColumns.length) {
-        alert('Заполните сопоставление всех обязательных столбцов.');
-        return;
-    }
-
-    setStatus('отправка данных на сервер...');
-    setProgress(80);
-    addLog('Старт загрузки.');
-    processButton.disabled = true;
-    uploadButton.disabled = true;
-
-    const formData = new FormData();
-    formData.append('file', file);
-    formData.append('skip_rows', skipRows);
-    formData.append('mappings', JSON.stringify(mappings));
-    formData.append('collection_name', collectionName);
-    formData.append('article_mode', articleMode);
-    formData.append('batch_size', isNaN(batchSize) ? 16 : batchSize);
-    formData.append('points_batch_size', isNaN(pointsBatchSize) ? 200 : pointsBatchSize);
-    if (sheetName) {
-        formData.append('sheet_name', sheetName);
-    }
-
-    const pollStatus = async (jobId) => {
-        const response = await fetch(`/upload_status/${jobId}`);
-        if (!response.ok) {
-            throw new Error('Ошибка получения статуса загрузки.');
-        }
-        return response.json();
-    };
-
-    try {
-        const response = await fetch('/upload_processed_xlsx_async', {
-            method: 'POST',
-            body: formData
-        });
-
-        if (!response.ok) {
-            throw new Error('Произошла ошибка при старте загрузки.');
-        }
-
-        const { job_id: jobId } = await response.json();
-        addLog(`Задача запущена: ${jobId}`);
-
-        let isRunning = true;
-        while (isRunning) {
-            await new Promise((resolve) => setTimeout(resolve, 1500));
-            const status = await pollStatus(jobId);
-
-            if (status.status === 'failed') {
-                throw new Error(status.error || 'Ошибка обработки файла.');
-            }
-
-            const progressValue = status.progress ?? 0;
-            setProgress(progressValue);
-            setStatus(`в процессе... ${progressValue}%`);
-
-            if (status.total_rows) {
-                addLog(
-                    `Прогресс: ${status.indexed_rows}/${status.total_rows} | ` +
-                    `${status.rate || 0} строк/сек | ETA ${status.eta || 0}с`
-                );
-            }
-
-            if (status.status === 'completed') {
-                isRunning = false;
-                setStatus(`успех! Проиндексировано строк: ${status.indexed_rows}`);
-                setProgress(100);
-                addLog(`Готово за ${status.duration_sec || 0} сек.`);
-            }
-        }
-    } catch (error) {
-        setStatus('ошибка загрузки данных.');
-        setProgress(0);
-        addLog(`Ошибка: ${error.message}`);
-        alert(error.message);
-    } finally {
-        processButton.disabled = false;
-        uploadButton.disabled = false;
-    }
-});
-
-stockProcessButton.addEventListener('click', () => {
-    const fileInput = document.getElementById('stock-xlsx-file');
-    const skipRows = parseInt(document.getElementById('stock-skip-rows').value, 10);
-
-    if (fileInput.files.length === 0) {
-        alert('Пожалуйста, выберите файл.');
-        return;
-    }
-
-    const file = fileInput.files[0];
-    const reader = new FileReader();
-
-    setStockStatus('чтение файла...');
-    setStockProgress(5);
-
-    reader.onprogress = function(event) {
-        if (event.lengthComputable) {
-            const percent = Math.round((event.loaded / event.total) * 40);
-            setStockProgress(percent);
-        }
-    };
-
-    reader.onload = function(e) {
-        setStockStatus('обработка заголовков...');
-        setStockProgress(55);
-
-        const data = new Uint8Array(e.target.result);
-        const workbook = XLSX.read(data, {type: 'array'});
-        const firstSheetName = workbook.SheetNames[0];
-        const worksheet = workbook.Sheets[firstSheetName];
-        const json = XLSX.utils.sheet_to_json(worksheet, { header: 1 });
-
-        const headers = json[skipRows];
-        const columnMappingsDiv = document.getElementById('stock-column-mappings');
-        columnMappingsDiv.innerHTML = '';
-
-        const requiredColumns = ['Артикул', 'Остаток'];
-
-        requiredColumns.forEach(requiredCol => {
-            const row = document.createElement('div');
-            row.className = 'mapping-row';
-
-            const label = document.createElement('label');
-            label.textContent = requiredCol;
-
-            const select = document.createElement('select');
-            select.id = `stock-select-${requiredCol}`;
-
-            const defaultOption = document.createElement('option');
-            defaultOption.value = '';
-            defaultOption.textContent = `Выберите столбец для "${requiredCol}"`;
-            select.appendChild(defaultOption);
-
-            headers.forEach((header, index) => {
-                const option = document.createElement('option');
-                option.value = index;
-                option.textContent = header;
-                select.appendChild(option);
+            arr.forEach((item, idx) => {
+                lines.push(`  ${idx + 1}. ${item.title || 'n/a'} | rank=${item.rank ?? 'n/a'} | score=${item.score ?? 'n/a'}`);
             });
+        };
 
-            row.appendChild(label);
-            row.appendChild(select);
-            columnMappingsDiv.appendChild(row);
-        });
-
-        stockUploadButton.style.display = 'inline-flex';
-        setStockStatus('готово к обновлению. Настройте маппинг.');
-        setStockProgress(70);
-    };
-
-    reader.onerror = function() {
-        setStockStatus('ошибка чтения файла');
-        setStockProgress(0);
-    };
-
-    reader.readAsArrayBuffer(file);
-});
-
-stockUploadButton.addEventListener('click', async () => {
-    const fileInput = document.getElementById('stock-xlsx-file');
-    const skipRows = parseInt(document.getElementById('stock-skip-rows').value, 10);
-    const batchSize = parseInt(document.getElementById('stock-batch-size').value, 10);
-    const file = fileInput.files[0];
-    const collectionName = document.getElementById('stock-collection-name').value;
-
-    if (!file) {
-        alert('Пожалуйста, выберите файл.');
-        return;
+        lines.push('');
+        lines.push('Breakdown (dense / sparse / hybrid):');
+        block('Dense top', breakdown.dense_top || []);
+        block('Sparse top', breakdown.sparse_top || []);
+        block('Hybrid top', breakdown.hybrid_top || []);
     }
 
-    const mappings = {};
-    const requiredColumns = ['Артикул', 'Остаток'];
-    requiredColumns.forEach(requiredCol => {
-        const selectedIndex = document.getElementById(`stock-select-${requiredCol}`).value;
-        if (selectedIndex !== '') {
-            mappings[requiredCol] = parseInt(selectedIndex, 10);
-        }
+    return lines.join('\n');
+};
+
+if (processButton) {
+    processButton.addEventListener('click', () => {
+        const skipRows = parseInt(skipRowsInput?.value || '0', 10) || 0;
+        if (!xlsxFileInput?.files?.length) return alert('Выберите XLSX файл');
+
+        const reader = new FileReader();
+        setStatus(statusText, 'чтение файла...');
+        setProgress(progressFill, 20);
+
+        reader.onload = (e) => {
+            const data = new Uint8Array(e.target.result);
+            cachedWorkbook = XLSX.read(data, { type: 'array' });
+            const sheets = cachedWorkbook.SheetNames || [];
+            sheetSelect.innerHTML = '';
+            sheets.forEach((name, index) => {
+                const option = document.createElement('option');
+                option.value = name;
+                option.textContent = name;
+                if (index === 0) option.selected = true;
+                sheetSelect.appendChild(option);
+            });
+            sheetSelect.disabled = sheets.length === 0;
+
+            if (!sheets.length) {
+                setStatus(statusText, 'листы не найдены');
+                setProgress(progressFill, 0);
+                return;
+            }
+
+            const ws = cachedWorkbook.Sheets[sheetSelect.value || sheets[0]];
+            const rows = XLSX.utils.sheet_to_json(ws, { header: 1 });
+            const headers = rows[skipRows] || [];
+            renderMappings('column-mappings', mainRequiredColumns, headers);
+            uploadButton.style.display = 'inline-flex';
+            setStatus(statusText, 'готово к загрузке');
+            setProgress(progressFill, 70);
+        };
+
+        reader.readAsArrayBuffer(xlsxFileInput.files[0]);
     });
+}
 
-    if (Object.keys(mappings).length !== requiredColumns.length) {
-        alert('Заполните сопоставление всех обязательных столбцов.');
-        return;
-    }
+if (sheetSelect) {
+    sheetSelect.addEventListener('change', () => {
+        if (!cachedWorkbook) return;
+        const skipRows = parseInt(skipRowsInput?.value || '0', 10) || 0;
+        const ws = cachedWorkbook.Sheets[sheetSelect.value];
+        const rows = XLSX.utils.sheet_to_json(ws, { header: 1 });
+        renderMappings('column-mappings', mainRequiredColumns, rows[skipRows] || []);
+    });
+}
 
-    setStockStatus('отправка данных на сервер...');
-    setStockProgress(80);
-    addStockLog('Старт обновления.');
-    stockProcessButton.disabled = true;
-    stockUploadButton.disabled = true;
+if (uploadButton) {
+    uploadButton.addEventListener('click', async () => {
+        const file = xlsxFileInput?.files?.[0];
+        if (!file) return alert('Выберите файл');
 
-    const formData = new FormData();
-    formData.append('file', file);
-    formData.append('skip_rows', skipRows);
-    formData.append('collection_name', collectionName);
-    formData.append('article_col', mappings['Артикул']);
-    formData.append('stock_col', mappings['Остаток']);
-    formData.append('batch_size', isNaN(batchSize) ? 200 : batchSize);
-
-    const pollStatus = async (jobId) => {
-        const response = await fetch(`/stock_status/${jobId}`);
-        if (!response.ok) {
-            throw new Error('Ошибка получения статуса обновления.');
+        const mappings = {};
+        for (const col of mainRequiredColumns) {
+            const v = document.getElementById(`select-${col}`).value;
+            if (v !== '') mappings[col] = parseInt(v, 10);
         }
-        return response.json();
-    };
-
-    try {
-        const response = await fetch('/upload_stock_async', {
-            method: 'POST',
-            body: formData
-        });
-
-        if (!response.ok) {
-            throw new Error('Произошла ошибка при старте обновления.');
+        if (Object.keys(mappings).length !== mainRequiredColumns.length) {
+            return alert('Заполните маппинг обязательных столбцов');
         }
 
-        const { job_id: jobId } = await response.json();
-        addStockLog(`Задача запущена: ${jobId}`);
-
-        let isRunning = true;
-        while (isRunning) {
-            await new Promise((resolve) => setTimeout(resolve, 1500));
-            const status = await pollStatus(jobId);
-
-            if (status.status === 'failed') {
-                throw new Error(status.error || 'Ошибка обработки файла.');
-            }
-
-            const progressValue = status.progress ?? 0;
-            setStockProgress(progressValue);
-            setStockStatus(`в процессе... ${progressValue}%`);
-
-            if (status.total_rows) {
-                addStockLog(
-                    `Прогресс: ${status.processed_rows}/${status.total_rows} | ` +
-                    `обновлено ${status.updated_rows || 0}, пропущено ${status.skipped_rows || 0} | ` +
-                    `${status.rate || 0} строк/сек | ETA ${status.eta || 0}с`
-                );
-            }
-
-            if (status.status === 'completed') {
-                isRunning = false;
-                setStockStatus(`успех! Обновлено: ${status.updated_rows}`);
-                setStockProgress(100);
-                addStockLog(`Готово за ${status.duration_sec || 0} сек.`);
-            }
-
-            if (status.status === 'resetting') {
-                setStockStatus('обнуление остатков...');
-                setStockProgress(5);
-                addStockLog('Обнуление остатков по всей коллекции.');
-            }
-        }
-    } catch (error) {
-        setStockStatus('ошибка обновления.');
-        setStockProgress(0);
-        addStockLog(`Ошибка: ${error.message}`);
-        alert(error.message);
-    } finally {
-        stockProcessButton.disabled = false;
-        stockUploadButton.disabled = false;
-    }
-});
-
-if (deleteCollectionButton) {
-    deleteCollectionButton.addEventListener('click', async () => {
-        const collectionName = document.getElementById('delete-collection-name').value;
-        if (!collectionName) {
-            alert('Введите имя коллекции.');
-            return;
-        }
-
-        const confirmed = confirm(
-            `Удалить коллекцию "${collectionName}"? Все данные, dense/sparse векторы и индексы будут удалены.`
-        );
-        if (!confirmed) {
-            return;
-        }
-
-        setDeleteStatus('удаление коллекции...');
-        addDeleteLog(`Запрос удаления: ${collectionName}`);
-        deleteCollectionButton.disabled = true;
+        const formData = new FormData();
+        formData.append('file', file);
+        formData.append('skip_rows', skipRowsInput?.value || '0');
+        formData.append('mappings', JSON.stringify(mappings));
+        formData.append('collection_name', collectionNameInput?.value || 'my_collection');
+        formData.append('article_mode', articleModeInput?.value || 'price');
+        formData.append('batch_size', batchSizeInput?.value || '16');
+        formData.append('points_batch_size', pointsBatchSizeInput?.value || '200');
+        if (sheetSelect.value) formData.append('sheet_name', sheetSelect.value);
 
         try {
-            const response = await fetch(`/collection?collection_name=${encodeURIComponent(collectionName)}`, {
-                method: 'DELETE'
+            setStatus(statusText, 'запуск задачи...');
+            const { job_id } = await fetchJson('/upload_processed_xlsx_async', { method: 'POST', body: formData });
+            addLog(logOutput, `Задача: ${job_id}`);
+
+            await pollJob(`/upload_status/${job_id}`, (s) => {
+                setProgress(progressFill, s.progress || 0);
+                setStatus(statusText, `в процессе... ${s.progress || 0}%`);
             });
 
-            if (!response.ok) {
-                const payload = await response.json().catch(() => ({}));
-                throw new Error(payload.detail || 'Не удалось удалить коллекцию.');
-            }
+            setStatus(statusText, 'успех');
+            setProgress(progressFill, 100);
+        } catch (e) {
+            setStatus(statusText, 'ошибка');
+            setProgress(progressFill, 0);
+            addLog(logOutput, `Ошибка: ${e.message}`);
+            alert(e.message);
+        }
+    });
+}
 
-            const payload = await response.json();
-            setDeleteStatus('коллекция удалена');
-            addDeleteLog(`Удалено: ${payload.collection_name}`);
-        } catch (error) {
-            setDeleteStatus('ошибка удаления');
-            addDeleteLog(`Ошибка: ${error.message}`);
-            alert(error.message);
-        } finally {
-            deleteCollectionButton.disabled = false;
+if (stockProcessButton) {
+    stockProcessButton.addEventListener('click', () => {
+        const skipRows = parseInt(stockSkipRowsInput?.value || '0', 10) || 0;
+        if (!stockXlsxFileInput?.files?.length) return alert('Выберите XLSX файл');
+
+        const reader = new FileReader();
+        setStatus(stockStatusText, 'чтение файла...');
+        reader.onload = (e) => {
+            const data = new Uint8Array(e.target.result);
+            const workbook = XLSX.read(data, { type: 'array' });
+            const ws = workbook.Sheets[workbook.SheetNames[0]];
+            const rows = XLSX.utils.sheet_to_json(ws, { header: 1 });
+            renderMappings('stock-column-mappings', ['Артикул', 'Остаток'], rows[skipRows] || [], 'stock-');
+            stockUploadButton.style.display = 'inline-flex';
+            setStatus(stockStatusText, 'готово к обновлению');
+            setProgress(stockProgressFill, 60);
+        };
+        reader.readAsArrayBuffer(stockXlsxFileInput.files[0]);
+    });
+}
+
+if (stockUploadButton) {
+    stockUploadButton.addEventListener('click', async () => {
+        const file = stockXlsxFileInput?.files?.[0];
+        if (!file) return alert('Выберите файл');
+
+        const articleCol = document.getElementById('stock-select-Артикул').value;
+        const stockCol = document.getElementById('stock-select-Остаток').value;
+        if (articleCol === '' || stockCol === '') return alert('Заполните маппинг');
+
+        const formData = new FormData();
+        formData.append('file', file);
+        formData.append('skip_rows', stockSkipRowsInput?.value || '0');
+        formData.append('collection_name', stockCollectionNameInput?.value || 'my_collection');
+        formData.append('article_col', articleCol);
+        formData.append('stock_col', stockCol);
+        formData.append('batch_size', stockBatchSizeInput?.value || '200');
+
+        try {
+            const { job_id } = await fetchJson('/upload_stock_async', { method: 'POST', body: formData });
+            addLog(stockLogOutput, `Задача: ${job_id}`);
+
+            await pollJob(`/stock_status/${job_id}`, (s) => {
+                setProgress(stockProgressFill, s.progress || 0);
+                setStatus(stockStatusText, `в процессе... ${s.progress || 0}%`);
+            });
+
+            setStatus(stockStatusText, 'успех');
+            setProgress(stockProgressFill, 100);
+        } catch (e) {
+            setStatus(stockStatusText, 'ошибка');
+            setProgress(stockProgressFill, 0);
+            addLog(stockLogOutput, `Ошибка: ${e.message}`);
+            alert(e.message);
         }
     });
 }
 
 if (passportsUploadButton) {
     passportsUploadButton.addEventListener('click', async () => {
-        const fileInput = document.getElementById('passports-files');
-        const collectionName = document.getElementById('passports-collection-name').value;
-        const batchSize = parseInt(document.getElementById('passports-batch-size').value, 10);
-        const pointsBatchSize = parseInt(document.getElementById('passports-points-batch-size').value, 10);
-        const files = fileInput.files;
-
-        if (!files || files.length === 0) {
-            alert('Пожалуйста, выберите PDF файлы.');
-            return;
-        }
-
-        if (files.length > 30) {
-            alert('Можно выбрать не более 30 файлов за раз.');
-            return;
-        }
-
-        setPassportsStatus('загрузка файлов...');
-        addPassportsLog(`Отправка ${files.length} файлов.`);
-        passportsUploadButton.disabled = true;
+        const files = passportsFilesInput?.files;
+        if (!files.length) return alert('Выберите PDF файлы');
 
         const formData = new FormData();
-        Array.from(files).forEach((file) => formData.append('files', file));
-        formData.append('collection_name', collectionName);
-        formData.append('batch_size', isNaN(batchSize) ? 8 : batchSize);
-        formData.append('points_batch_size', isNaN(pointsBatchSize) ? 200 : pointsBatchSize);
-
-        const pollStatus = async (jobId) => {
-            const response = await fetch(`/passports_status/${jobId}`);
-            if (!response.ok) {
-                throw new Error('Ошибка получения статуса загрузки паспортов.');
-            }
-            return response.json();
-        };
+        Array.from(files).forEach((f) => formData.append('files', f));
+        formData.append('collection_name', passportsCollectionInput?.value || 'passports_collection');
+        formData.append('batch_size', passportsBatchSizeInput?.value || '8');
+        formData.append('points_batch_size', passportsPointsBatchSizeInput?.value || '200');
 
         try {
-            const response = await fetch('/upload_passports_async', {
-                method: 'POST',
-                body: formData
+            const { job_id } = await fetchJson('/upload_passports_async', { method: 'POST', body: formData });
+            addLog(passportsLogOutput, `Задача: ${job_id}`);
+
+            await pollJob(`/passports_status/${job_id}`, (s) => {
+                setStatus(passportsStatusText, `в процессе... ${s.progress || 0}%`);
             });
 
-            if (!response.ok) {
-                const payload = await response.json().catch(() => ({}));
-                throw new Error(payload.detail || 'Ошибка старта загрузки паспортов.');
-            }
-
-            const { job_id: jobId } = await response.json();
-            addPassportsLog(`Задача запущена: ${jobId}`);
-
-            let isRunning = true;
-            while (isRunning) {
-                await new Promise((resolve) => setTimeout(resolve, 1500));
-                const status = await pollStatus(jobId);
-
-                if (status.status === 'failed') {
-                    throw new Error(status.error || 'Ошибка обработки паспортов.');
-                }
-
-                const progressValue = status.progress ?? 0;
-                setPassportsStatus(`в процессе... ${progressValue}%`);
-
-                if (status.total_chunks) {
-                    addPassportsLog(
-                        `Прогресс: ${status.indexed_chunks || 0}/${status.total_chunks}`
-                    );
-                }
-
-                if (status.status === 'completed') {
-                    isRunning = false;
-                    setPassportsStatus(
-                        `успех! Чанков: ${status.indexed_chunks || 0}, пропущено файлов: ${status.skipped_files || 0}`
-                    );
-                    addPassportsLog(`Готово за ${status.duration_sec || 0} сек.`);
-                }
-            }
-        } catch (error) {
-            setPassportsStatus('ошибка загрузки');
-            addPassportsLog(`Ошибка: ${error.message}`);
-            alert(error.message);
-        } finally {
-            passportsUploadButton.disabled = false;
+            setStatus(passportsStatusText, 'успех');
+        } catch (e) {
+            setStatus(passportsStatusText, 'ошибка');
+            addLog(passportsLogOutput, `Ошибка: ${e.message}`);
+            alert(e.message);
         }
     });
 }
 
 if (passportsSearchButton) {
     passportsSearchButton.addEventListener('click', async () => {
-        const collectionName = document.getElementById('passports-collection-name').value;
-        const query = document.getElementById('passports-search-query').value.trim();
-        const limit = parseInt(document.getElementById('passports-search-limit').value, 10) || 5;
-
-        if (!query) {
-            alert('Введите поисковый запрос.');
-            return;
-        }
-
-        setPassportsSearchStatus('поиск...');
-        setPassportsSearchOutput('');
-        passportsSearchButton.disabled = true;
+        const q = passportsSearchQueryInput?.value?.trim();
+        if (!q) return alert('Введите запрос');
+        const collection = passportsCollectionInput?.value || 'passports_collection';
+        const limit = passportsSearchLimitInput?.value || '5';
 
         try {
-            const response = await fetch(
-                `/search_passports?collection_name=${encodeURIComponent(collectionName)}` +
-                `&query=${encodeURIComponent(query)}&limit=${limit}`
-            );
-
-            if (!response.ok) {
-                const payload = await response.json().catch(() => ({}));
-                throw new Error(payload.detail || 'Ошибка поиска.');
-            }
-
-            const payload = await response.json();
+            setStatus(passportsSearchStatus, 'поиск...');
+            const payload = await fetchJson(`/search_passports?collection_name=${encodeURIComponent(collection)}&query=${encodeURIComponent(q)}&limit=${encodeURIComponent(limit)}`);
             const results = payload.results || [];
-            const stage1Results = payload.stage1_results || [];
-            const selectedPdf = payload.selected_pdf || 'не выбран';
-            const debug = payload.debug || {};
-            const stage1Hits = debug.stage1_hits ?? 'n/a';
-            const sparseNonzero = debug.sparse_nonzero ?? 'n/a';
-            const denseDim = debug.dense_dim ?? 'n/a';
-            const pdfCounts = debug.stage1_pdf_counts || {};
-
-            addPassportsLog(
-                `Выбранный PDF: ${selectedPdf} | stage1 hits: ${stage1Hits} | ` +
-                `dense_dim: ${denseDim} | sparse_nonzero: ${sparseNonzero}`
-            );
-
-            const formattedStage1 = stage1Results.map((item, index) => {
-                const payloadData = item.payload || {};
-                const text = payloadData.text || '';
-                const preview = text.length > 200 ? `${text.slice(0, 200)}...` : text;
-                const score = item.score ?? 'n/a';
-                return [
-                    `S1 #${index + 1} score: ${score} | PDF: ${payloadData.pdf_name || 'unknown'} | страницы ${payloadData.page_range || ''}`,
-                    preview,
-                    ''
-                ].join('\n');
-            }).join('\n');
-
             if (!results.length) {
-                const formattedSummary = [
-                    `Выбранный PDF: ${selectedPdf}`,
-                    `Stage1 hits: ${stage1Hits}`,
-                    `Dense dim: ${denseDim}`,
-                    `Sparse nonzero: ${sparseNonzero}`,
-                    `PDF статистика: ${JSON.stringify(pdfCounts, null, 2)}`,
-                    '',
-                    'Stage1 результаты (score):',
-                    formattedStage1 || 'n/a',
-                ].join('\n');
-
-                setPassportsSearchStatus('ничего не найдено');
-                setPassportsSearchOutput(formattedSummary);
-                return;
+                passportsSearchOutput.textContent = 'Ничего не найдено';
+            } else {
+                passportsSearchOutput.textContent = results.map((r, i) => {
+                    return `#${i + 1}\nscore: ${r.score ?? 'n/a'}\npayload: ${JSON.stringify(r.payload || {}, null, 2)}\n`;
+                }).join('\n');
             }
-
-            const formattedResults = results.map((item, index) => {
-                const payloadData = item.payload || {};
-                const text = payloadData.text || '';
-                const preview = text.length > 500 ? `${text.slice(0, 500)}...` : text;
-                const vectors = item.vector || {};
-                const denseVector = vectors['text-dense'] || [];
-                const sparseVector = vectors['text-sparse'] || {};
-                const densePreview = denseVector.length
-                    ? JSON.stringify(denseVector.slice(0, 10)) + (denseVector.length > 10 ? ' ...' : '')
-                    : 'n/a';
-                const sparseIndices = sparseVector.indices || [];
-                const sparseValues = sparseVector.values || [];
-                const sparsePreview = sparseIndices.length
-                    ? JSON.stringify(
-                        sparseIndices.slice(0, 10).map((idx, i) => [idx, sparseValues[i]])
-                    ) + (sparseIndices.length > 10 ? ' ...' : '')
-                    : 'n/a';
-                return [
-                    `#${index + 1} PDF: ${payloadData.pdf_name || 'unknown'} | страницы ${payloadData.page_range || ''}`,
-                    preview,
-                    `Dense vector (first 10): ${densePreview}`,
-                    `Sparse vector (idx,val first 10): ${sparsePreview}`,
-                    ''
-                ].join('\n');
-            }).join('\n');
-
-            const formattedSummary = [
-                `Выбранный PDF: ${selectedPdf}`,
-                `Stage1 hits: ${stage1Hits}`,
-                `Dense dim: ${denseDim}`,
-                `Sparse nonzero: ${sparseNonzero}`,
-                `PDF статистика: ${JSON.stringify(pdfCounts, null, 2)}`,
-                '',
-                'Stage1 результаты (score):',
-                formattedStage1 || 'n/a',
-                '',
-                formattedResults,
-            ].join('\n');
-
-            setPassportsSearchStatus('готово');
-            setPassportsSearchOutput(formattedSummary);
-        } catch (error) {
-            setPassportsSearchStatus('ошибка поиска');
-            setPassportsSearchOutput(`Ошибка: ${error.message}`);
-            alert(error.message);
-        } finally {
-            passportsSearchButton.disabled = false;
+            setStatus(passportsSearchStatus, 'готово');
+        } catch (e) {
+            setStatus(passportsSearchStatus, 'ошибка');
+            passportsSearchOutput.textContent = `Ошибка: ${e.message}`;
+            alert(e.message);
         }
     });
 }
 
 if (mainSearchButton) {
     mainSearchButton.addEventListener('click', async () => {
-        const collectionName = document.getElementById('collection-name').value;
-        const query = document.getElementById('main-search-query').value.trim();
-        const mode = document.getElementById('main-search-mode').value;
-        const onlyInStock = document.getElementById('main-search-in-stock').value === 'true';
+        const q = mainSearchQueryInput?.value?.trim();
+        if (!q) return alert('Введите запрос');
 
-        if (!query) {
-            alert('Введите поисковый запрос.');
-            return;
-        }
+        const collection = collectionNameInput?.value || 'my_collection';
+        const mode = mainSearchModeInput?.value || 'hybrid';
+        const onlyInStock = mainSearchInStockInput?.value === 'true';
+        const limit = parseInt(mainSearchLimitInput?.value || '15', 10) || 15;
+        const candidateLimit = parseInt(mainSearchCandidateLimitInput?.value || '20', 10) || 20;
 
-        setMainSearchStatus('поиск...');
-        setMainSearchOutput('');
-        mainSearchButton.disabled = true;
+        const params = new URLSearchParams({
+            collection_name: collection,
+            query: q,
+            mode,
+            only_in_stock: String(onlyInStock),
+            limit: String(limit),
+            candidate_limit: String(candidateLimit),
+            include_breakdown: String(mode === 'hybrid'),
+        });
 
         try {
-            const response = await fetch(
-                `/search?collection_name=${encodeURIComponent(collectionName)}` +
-                `&query=${encodeURIComponent(query)}` +
-                `&mode=${encodeURIComponent(mode)}` +
-                `&only_in_stock=${onlyInStock}`
-            );
-
-            if (!response.ok) {
-                const payload = await response.json().catch(() => ({}));
-                throw new Error(payload.detail || 'Ошибка поиска.');
-            }
-
-            const payload = await response.json();
+            if (mainSearchController) mainSearchController.abort();
+            mainSearchController = new AbortController();
+            setStatus(mainSearchStatus, 'поиск...');
+            const payload = await fetchJson(`/search?${params.toString()}`, { signal: mainSearchController.signal }, 60000);
             const results = payload.results || [];
-            const debug = payload.debug || {};
-
-            if (!results.length) {
-                setMainSearchStatus('ничего не найдено');
-                setMainSearchOutput(
-                    `Результаты не найдены.\n` +
-                    `mode: ${debug.mode || mode}\n` +
-                    `dense_dim: ${debug.dense_dim ?? 'n/a'}\n` +
-                    `sparse_nonzero: ${debug.sparse_nonzero ?? 'n/a'}`
-                );
-                return;
+            mainSearchOutput.textContent = renderMainSearchOutput(results, payload.debug || null);
+            mainSearchDebug.textContent = payload.debug
+                ? JSON.stringify(payload.debug, null, 2)
+                : 'Debug не вернулся';
+            setStatus(mainSearchStatus, 'готово');
+        } catch (e) {
+            if (e.message === 'Превышено время ожидания запроса') {
+                addLog(mainSearchOutput, 'Поиск прерван по таймауту или отменён новым запросом');
             }
-
-            const formattedResults = results.map((item, index) => {
-                const payloadData = item.payload || {};
-                const score = item.score ?? 'n/a';
-                return [
-                    `#${index + 1} score: ${score}`,
-                    `payload: ${JSON.stringify(payloadData, null, 2)}`,
-                    ''
-                ].join('\n');
-            }).join('\n');
-
-            const formattedSummary = [
-                `mode: ${debug.mode || mode}`,
-                `dense_dim: ${debug.dense_dim ?? 'n/a'}`,
-                `sparse_nonzero: ${debug.sparse_nonzero ?? 'n/a'}`,
-                '',
-                formattedResults,
-            ].join('\n');
-
-            setMainSearchStatus('готово');
-            setMainSearchOutput(formattedSummary);
-        } catch (error) {
-            setMainSearchStatus('ошибка поиска');
-            setMainSearchOutput(`Ошибка: ${error.message}`);
-            alert(error.message);
+            setStatus(mainSearchStatus, 'ошибка');
+            mainSearchOutput.textContent = `Ошибка: ${e.message}`;
+            if (mainSearchDebug) mainSearchDebug.textContent = 'Debug недоступен';
+            alert(e.message);
         } finally {
-            mainSearchButton.disabled = false;
+            mainSearchController = null;
         }
     });
 }
 
-const fetchHfCacheInfo = async () => {
-    const response = await fetch('/hf_cache/info');
-    if (!response.ok) {
-        const payload = await response.json().catch(() => ({}));
-        throw new Error(payload.detail || 'Не удалось получить информацию о кэше.');
-    }
-    return response.json();
-};
-
-if (hfCacheRefreshButton) {
-    hfCacheRefreshButton.addEventListener('click', async () => {
-        setHfCacheStatus('обновление информации...');
-        hfCacheRefreshButton.disabled = true;
-        try {
-            const payload = await fetchHfCacheInfo();
-            renderHfCacheInfo(payload);
-            addHfCacheLog('Информация о кэше обновлена.');
-            setHfCacheStatus('готово');
-        } catch (error) {
-            setHfCacheStatus('ошибка');
-            addHfCacheLog(`Ошибка: ${error.message}`);
-            alert(error.message);
-        } finally {
-            hfCacheRefreshButton.disabled = false;
-        }
-    });
-}
-
-if (hfCacheClearButton) {
-    hfCacheClearButton.addEventListener('click', async () => {
-        const confirmed = confirm('Очистить HF‑кэш? Модели будут скачиваться заново.');
-        if (!confirmed) {
-            return;
-        }
-
-        setHfCacheStatus('очистка кэша...');
-        hfCacheClearButton.disabled = true;
-        try {
-            const response = await fetch('/hf_cache/clear', { method: 'POST' });
-            if (!response.ok) {
-                const payload = await response.json().catch(() => ({}));
-                throw new Error(payload.detail || 'Не удалось очистить кэш.');
-            }
-            const payload = await response.json();
-            addHfCacheLog(`Кэш очищен: ${payload.hf_hub_cache || ''}`);
-            setHfCacheStatus('кэш очищен');
-            const info = await fetchHfCacheInfo();
-            renderHfCacheInfo(info);
-        } catch (error) {
-            setHfCacheStatus('ошибка');
-            addHfCacheLog(`Ошибка: ${error.message}`);
-            alert(error.message);
-        } finally {
-            hfCacheClearButton.disabled = false;
-        }
-    });
-}
-
-if (integrationsRefreshButton) {
-    integrationsRefreshButton.addEventListener('click', async () => {
-        integrationsRefreshButton.disabled = true;
-        setIntegrationsStatus('загрузка настроек...');
-        try {
-            const payload = await loadRuntimeConfig();
-            renderRuntimeConfig(payload);
-            addIntegrationsLog('Настройки интеграций обновлены.');
-            setIntegrationsStatus('готово');
-        } catch (error) {
-            setIntegrationsStatus('ошибка');
-            addIntegrationsLog(`Ошибка: ${error.message}`);
-            alert(error.message);
-        } finally {
-            integrationsRefreshButton.disabled = false;
-        }
-    });
-}
-
-if (integrationsSaveButton) {
-    integrationsSaveButton.addEventListener('click', async () => {
-        const polzaApiKey = document.getElementById('polza-api-key')?.value || '';
-        const polzaModel = document.getElementById('polza-model')?.value || 'openai/gpt-4o';
-        const polzaTemperature = parseFloat(document.getElementById('polza-temperature')?.value || '0.2');
-        const polzaMaxTokens = parseInt(document.getElementById('polza-max-tokens')?.value || '500', 10);
-        const polzaBaseUrl = document.getElementById('polza-base-url')?.value || 'https://polza.ai/api/v1/chat/completions';
-
-        const bitrixClientId = document.getElementById('bitrix-client-id')?.value || '';
-        const bitrixClientSecret = document.getElementById('bitrix-client-secret')?.value || '';
-        const bitrixRedirectUri = document.getElementById('bitrix-redirect-uri')?.value || '';
-        const bitrixWebhookUrl = document.getElementById('bitrix-webhook-url')?.value || '';
-        const bitrixPortalBaseUrl = document.getElementById('bitrix-portal-base-url')?.value || '';
-        const bitrixOauthAuthUrl = document.getElementById('bitrix-oauth-auth-url')?.value || 'https://oauth.bitrix.info/oauth/authorize/';
-        const bitrixOauthTokenUrl = document.getElementById('bitrix-oauth-token-url')?.value || 'https://oauth.bitrix.info/oauth/token/';
-        const bitrixBotId = document.getElementById('bitrix-bot-id')?.value || '';
-        const bitrixCollectionName = document.getElementById('bitrix-collection-name')?.value || 'my_collection';
-        const bitrixDocsCollectionName = document.getElementById('bitrix-docs-collection-name')?.value || 'passports_collection';
-        const bitrixSearchMode = document.getElementById('bitrix-search-mode')?.value || 'hybrid';
-
-        const polzaPayload = {
-            model: polzaModel,
-            temperature: Number.isFinite(polzaTemperature) ? polzaTemperature : 0.2,
-            max_tokens: Number.isFinite(polzaMaxTokens) ? polzaMaxTokens : 500,
-            base_url: polzaBaseUrl,
-        };
-        if (polzaApiKey.trim()) {
-            polzaPayload.api_key = polzaApiKey.trim();
-        }
-
-        const bitrixPayload = {
-            client_id: bitrixClientId,
-            redirect_uri: bitrixRedirectUri,
-            webhook_url: bitrixWebhookUrl,
-            portal_base_url: bitrixPortalBaseUrl,
-            oauth_auth_url: bitrixOauthAuthUrl,
-            oauth_token_url: bitrixOauthTokenUrl,
-            bot_id: bitrixBotId,
-            collection_name: bitrixCollectionName,
-            docs_collection_name: bitrixDocsCollectionName,
-            search_mode: bitrixSearchMode,
-        };
-        if (bitrixClientSecret.trim()) {
-            bitrixPayload.client_secret = bitrixClientSecret.trim();
-        }
-
-        integrationsSaveButton.disabled = true;
-        setIntegrationsStatus('сохранение...');
-        try {
-            const response = await fetch('/runtime_config', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify({
-                    polza: polzaPayload,
-                    bitrix: bitrixPayload,
-                })
-            });
-
-            if (!response.ok) {
-                const payload = await response.json().catch(() => ({}));
-                throw new Error(payload.detail || 'Не удалось сохранить настройки интеграций');
-            }
-
-            const payload = await response.json();
-            renderRuntimeConfig(payload.config || {});
-
-            const polzaApiKeyInput = document.getElementById('polza-api-key');
-            const bitrixClientSecretInput = document.getElementById('bitrix-client-secret');
-            if (polzaApiKeyInput) polzaApiKeyInput.value = '';
-            if (bitrixClientSecretInput) bitrixClientSecretInput.value = '';
-
-            addIntegrationsLog('Настройки интеграций сохранены.');
-            setIntegrationsStatus('сохранено');
-        } catch (error) {
-            setIntegrationsStatus('ошибка');
-            addIntegrationsLog(`Ошибка: ${error.message}`);
-            alert(error.message);
-        } finally {
-            integrationsSaveButton.disabled = false;
-        }
-    });
-}
-
-if (bitrixOauthConnectButton) {
-    bitrixOauthConnectButton.addEventListener('click', async () => {
-        bitrixOauthConnectButton.disabled = true;
-        setIntegrationsStatus('получение OAuth URL...');
-        try {
-            const response = await fetch('/bitrix/oauth/connect_url');
-            if (!response.ok) {
-                const payload = await response.json().catch(() => ({}));
-                throw new Error(payload.detail || 'Не удалось получить OAuth URL');
-            }
-            const payload = await response.json();
-            const connectUrl = payload.connect_url;
-            addIntegrationsLog(`OAuth URL получен. state=${payload.state}`);
-            setIntegrationsStatus('откройте окно OAuth и завершите авторизацию');
-            window.open(connectUrl, '_blank', 'noopener,noreferrer');
-        } catch (error) {
-            setIntegrationsStatus('ошибка OAuth');
-            addIntegrationsLog(`Ошибка: ${error.message}`);
-            alert(error.message);
-        } finally {
-            bitrixOauthConnectButton.disabled = false;
-        }
-    });
-}
-
-if (bitrixOauthRefreshButton) {
-    bitrixOauthRefreshButton.addEventListener('click', async () => {
-        bitrixOauthRefreshButton.disabled = true;
-        setIntegrationsStatus('обновление OAuth токена...');
-        try {
-            const response = await fetch('/bitrix/oauth/refresh', { method: 'POST' });
-            if (!response.ok) {
-                const payload = await response.json().catch(() => ({}));
-                throw new Error(payload.detail || 'Не удалось обновить токен');
-            }
-            const payload = await response.json();
-            addIntegrationsLog(`OAuth токен обновлен. expires_at=${payload.expires_at}`);
-            setIntegrationsStatus('OAuth токен обновлён');
-        } catch (error) {
-            setIntegrationsStatus('ошибка OAuth refresh');
-            addIntegrationsLog(`Ошибка: ${error.message}`);
-            alert(error.message);
-        } finally {
-            bitrixOauthRefreshButton.disabled = false;
-        }
-    });
-}
-
-if (bitrixOauthStatusButton) {
-    bitrixOauthStatusButton.addEventListener('click', async () => {
-        bitrixOauthStatusButton.disabled = true;
-        setIntegrationsStatus('проверка OAuth статуса...');
-        try {
-            const response = await fetch('/bitrix/oauth/status');
-            if (!response.ok) {
-                const payload = await response.json().catch(() => ({}));
-                throw new Error(payload.detail || 'Не удалось получить OAuth статус');
-            }
-            const payload = await response.json();
-            addIntegrationsLog(
-                `OAuth status: connected=${payload.connected}, portal=${payload.portal_base_url || 'n/a'}, expires_in=${payload.expires_in || 0}s`
-            );
-            setIntegrationsStatus(payload.connected ? 'OAuth подключен' : 'OAuth не подключен');
-        } catch (error) {
-            setIntegrationsStatus('ошибка OAuth status');
-            addIntegrationsLog(`Ошибка: ${error.message}`);
-            alert(error.message);
-        } finally {
-            bitrixOauthStatusButton.disabled = false;
-        }
-    });
-}
-
-if (botToolsRegisterButton) {
-    botToolsRegisterButton.addEventListener('click', async () => {
-        const payload = {
-            handler_url: document.getElementById('bot-tools-handler-url')?.value || '',
-            code: document.getElementById('bot-tools-code')?.value || '',
-            type: document.getElementById('bot-tools-type')?.value || 'B',
-            name: document.getElementById('bot-tools-name')?.value || 'RAG Bot',
-            last_name: document.getElementById('bot-tools-last-name')?.value || '',
-            color: document.getElementById('bot-tools-color')?.value || 'AQUA',
-            email: document.getElementById('bot-tools-email')?.value || '',
-            work_position: document.getElementById('bot-tools-work-position')?.value || '',
-        };
-
-        botToolsRegisterButton.disabled = true;
-        setBotToolsStatus('создание бота...');
+if (deleteCollectionButton) {
+    deleteCollectionButton.addEventListener('click', async () => {
+        const collection = deleteCollectionNameInput?.value?.trim();
+        if (!collection) return alert('Введите имя коллекции');
+        if (!confirm(`Удалить коллекцию ${collection}?`)) return;
 
         try {
-            const response = await fetch('/bitrix/bot/register', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload),
-            });
-
-            if (!response.ok) {
-                throw new Error(await extractHttpError(response, 'Не удалось создать бота'));
-            }
-
-            const result = await response.json();
-            const newBotId = result.bot_id || '';
-            const bitrixBotIdInput = document.getElementById('bitrix-bot-id');
-            const botToolsBotIdInput = document.getElementById('bot-tools-bot-id');
-            if (newBotId) {
-                if (bitrixBotIdInput) bitrixBotIdInput.value = newBotId;
-                if (botToolsBotIdInput) botToolsBotIdInput.value = newBotId;
-            }
-
-            addBotToolsLog(`Бот создан. bot_id=${newBotId || 'n/a'}, handler=${result.handler_url || 'n/a'}`);
-            setBotToolsStatus('бот создан');
-        } catch (error) {
-            setBotToolsStatus('ошибка создания');
-            addBotToolsLog(`Ошибка: ${error.message}`);
-            alert(error.message);
-        } finally {
-            botToolsRegisterButton.disabled = false;
+            setStatus(deleteStatusText, 'удаление...');
+            await fetchJson(`/collection?collection_name=${encodeURIComponent(collection)}`, { method: 'DELETE' });
+            setStatus(deleteStatusText, 'удалено');
+            addLog(deleteLogOutput, `Удалена коллекция ${collection}`);
+        } catch (e) {
+            setStatus(deleteStatusText, 'ошибка');
+            addLog(deleteLogOutput, `Ошибка: ${e.message}`);
+            alert(e.message);
         }
     });
 }
 
-if (botToolsUpdateButton) {
-    botToolsUpdateButton.addEventListener('click', async () => {
-        const payload = {
-            bot_id: document.getElementById('bot-tools-bot-id')?.value || '',
-            name: document.getElementById('bot-tools-name')?.value || '',
-            last_name: document.getElementById('bot-tools-last-name')?.value || '',
-            color: document.getElementById('bot-tools-color')?.value || '',
-            work_position: document.getElementById('bot-tools-work-position')?.value || '',
-        };
-
-        botToolsUpdateButton.disabled = true;
-        setBotToolsStatus('обновление бота...');
-
-        try {
-            const response = await fetch('/bitrix/bot/update', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload),
-            });
-
-            if (!response.ok) {
-                throw new Error(await extractHttpError(response, 'Не удалось обновить бота'));
-            }
-
-            const result = await response.json();
-            const updatedBotId = result.bot_id || payload.bot_id || '';
-            const bitrixBotIdInput = document.getElementById('bitrix-bot-id');
-            if (bitrixBotIdInput && updatedBotId) {
-                bitrixBotIdInput.value = updatedBotId;
-            }
-
-            addBotToolsLog(`Бот обновлён. bot_id=${updatedBotId || 'n/a'}`);
-            setBotToolsStatus('бот обновлён');
-        } catch (error) {
-            setBotToolsStatus('ошибка обновления');
-            addBotToolsLog(`Ошибка: ${error.message}`);
-            alert(error.message);
-        } finally {
-            botToolsUpdateButton.disabled = false;
-        }
+if (aiSaveSettingsButton) {
+    loadAiSettings();
+    setStatus(aiSettingsStatus, 'настройки загружены');
+    aiSaveSettingsButton.addEventListener('click', () => {
+        saveAiSettings();
+        setStatus(aiSettingsStatus, 'настройки сохранены локально');
     });
 }
 
-if (webChatSendButton) {
-    webChatSendButton.addEventListener('click', async () => {
-        const dialogId = document.getElementById('web-chat-dialog-id')?.value || 'web-test-dialog';
-        const message = document.getElementById('web-chat-message')?.value || '';
-        if (!message.trim()) {
-            alert('Введите сообщение для тестового чата');
-            return;
-        }
+preloadCollectionName();
 
-        webChatSendButton.disabled = true;
-        setWebChatStatus('обработка команды...');
-        addWebChatLog(`Вы: ${message}`);
-
-        try {
-            const response = await fetch('/bitrix/test_chat', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    dialog_id: dialogId,
-                    message,
-                }),
-            });
-
-            if (!response.ok) {
-                const err = await response.json().catch(() => ({}));
-                throw new Error(err.detail || 'Ошибка тестового чата');
-            }
-
-            const result = await response.json();
-            addWebChatLog(`Бот: ${result.reply || 'Пустой ответ'}`);
-            setWebChatStatus('ответ получен');
-        } catch (error) {
-            setWebChatStatus('ошибка');
-            addWebChatLog(`Ошибка: ${error.message}`);
-            alert(error.message);
-        } finally {
-            webChatSendButton.disabled = false;
-        }
+if (aiSendChatButton) {
+    aiSendChatButton.addEventListener('click', async () => {
+        await sendAiRequest('/agent/chat');
     });
 }
 
-(async () => {
-    if (!integrationsRefreshButton) {
-        return;
-    }
-    try {
-        const payload = await loadRuntimeConfig();
-        renderRuntimeConfig(payload);
-    } catch {
-        // ignore bootstrap error
-    }
-})();
+if (aiSendSpecButton) {
+    aiSendSpecButton.addEventListener('click', async () => {
+        await sendAiRequest('/agent/spec');
+    });
+}

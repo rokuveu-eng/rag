@@ -2,7 +2,7 @@
 <html lang="ru">
 <head>
     <meta charset="UTF-8">
-    <title>Загрузка и обработка XLSX</title>
+    <title>Catalog Search UI</title>
     <style>
         :root {
             color-scheme: light;
@@ -10,50 +10,41 @@
             background: #f6f7fb;
             color: #1f2937;
         }
-        body {
-            margin: 0;
-            padding: 32px 16px 48px;
-        }
+        body { margin: 0; padding: 32px 16px 48px; }
         .container {
-            max-width: 860px;
+            max-width: 920px;
             margin: 0 auto;
-            background: #ffffff;
+            background: #fff;
             border-radius: 16px;
             box-shadow: 0 12px 40px rgba(15, 23, 42, 0.08);
             padding: 32px;
         }
-        h1 {
-            margin: 0 0 8px;
-            font-size: 28px;
-        }
-        .subtitle {
-            color: #6b7280;
-            margin-bottom: 24px;
-        }
+        h1 { margin: 0 0 8px; font-size: 28px; }
+        .subtitle { color: #6b7280; margin-bottom: 24px; }
         .grid {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
             gap: 16px;
         }
-        label {
-            font-weight: 600;
-            display: block;
-            margin-bottom: 6px;
-        }
-        input[type="text"],
-        input[type="number"],
-        input[type="file"],
-        select {
+        label { font-weight: 600; display: block; margin-bottom: 6px; }
+        input[type="text"], input[type="number"], input[type="file"], select {
             width: 100%;
             padding: 10px 12px;
             border: 1px solid #e5e7eb;
             border-radius: 10px;
             font-size: 14px;
         }
-        input[type="file"] {
-            padding: 10px;
-            background: #f9fafb;
+        textarea {
+            width: 100%;
+            padding: 10px 12px;
+            border: 1px solid #e5e7eb;
+            border-radius: 10px;
+            font-size: 14px;
+            min-height: 88px;
+            resize: vertical;
+            font-family: inherit;
         }
+        input[type="file"] { padding: 10px; background: #f9fafb; }
         button {
             background: #4f46e5;
             color: #fff;
@@ -62,20 +53,9 @@
             border-radius: 10px;
             font-weight: 600;
             cursor: pointer;
-            transition: all 0.2s ease;
         }
-        button:hover {
-            background: #4338ca;
-        }
-        button:disabled {
-            background: #c7d2fe;
-            cursor: not-allowed;
-        }
-        .section {
-            margin-top: 28px;
-            padding-top: 24px;
-            border-top: 1px solid #eef2f7;
-        }
+        button:disabled { background: #c7d2fe; cursor: not-allowed; }
+        .section { margin-top: 28px; padding-top: 24px; border-top: 1px solid #eef2f7; }
         .status {
             margin-top: 12px;
             padding: 12px 16px;
@@ -110,26 +90,15 @@
             background: linear-gradient(90deg, #6366f1, #22c55e);
             transition: width 0.2s ease;
         }
-        .hint {
-            font-size: 12px;
-            color: #6b7280;
-            margin-top: 6px;
-        }
-        .mappings {
-            display: grid;
-            gap: 12px;
-        }
+        .hint { font-size: 12px; color: #6b7280; margin-top: 6px; }
+        .mappings { display: grid; gap: 12px; }
         .mapping-row {
             display: grid;
             grid-template-columns: minmax(140px, 200px) 1fr;
             gap: 12px;
             align-items: center;
         }
-        .tabs {
-            display: flex;
-            gap: 12px;
-            margin-top: 24px;
-        }
+        .tabs { display: flex; gap: 12px; margin-top: 24px; flex-wrap: wrap; }
         .tab-button {
             background: #e0e7ff;
             color: #1e3a8a;
@@ -139,436 +108,254 @@
             font-weight: 600;
             cursor: pointer;
         }
-        .tab-button.active {
-            background: #4f46e5;
-            color: #fff;
-        }
-        .tab-content {
-            display: none;
-            margin-top: 24px;
-        }
-        .tab-content.active {
-            display: block;
-        }
+        .tab-button.active { background: #4f46e5; color: #fff; }
+        .tab-content { display: none; margin-top: 24px; }
+        .tab-content.active { display: block; }
     </style>
 </head>
 <body>
-    <div class="container">
-        <h1>Загрузка и обработка XLSX</h1>
-        <p class="subtitle">Подготовьте файл, сопоставьте столбцы и загрузите данные в Qdrant.</p>
+<div class="container">
+    <h1>Catalog Search UI</h1>
+    <p class="subtitle">Актуальный флоу: загрузка прайса → RRF hybrid поиск.</p>
 
-        <div class="tabs">
-            <button class="tab-button active" data-tab="index">Основная загрузка</button>
-            <button class="tab-button" data-tab="stock">Остатки</button>
-            <button class="tab-button" data-tab="passports">Паспорта</button>
-            <button class="tab-button" data-tab="delete">Удаление</button>
-            <button class="tab-button" data-tab="hf-cache">HF кэш</button>
-            <button class="tab-button" data-tab="integrations">Интеграции</button>
-            <button class="tab-button" data-tab="bot-tools">Бот: создание и тест</button>
+    <div class="tabs">
+        <button class="tab-button active" data-tab="index">Основная загрузка</button>
+        <button class="tab-button" data-tab="stock">Остатки (расшир.)</button>
+        <button class="tab-button" data-tab="passports">Паспорта (расшир.)</button>
+        <button class="tab-button" data-tab="ai">AI чат</button>
+        <button class="tab-button" data-tab="delete">Удаление</button>
+    </div>
+
+    <div class="tab-content active" id="tab-index">
+        <div class="grid">
+            <div>
+                <label for="collection-name">Имя коллекции</label>
+                <input type="text" id="collection-name" value="CHINT">
+            </div>
+            <div>
+                <label for="skip-rows">Пропустить верхние строки</label>
+                <input type="number" id="skip-rows" value="0" min="0">
+            </div>
+            <div>
+                <label for="batch-size">Batch size</label>
+                <input type="number" id="batch-size" value="16" min="1" max="128">
+            </div>
+            <div>
+                <label for="points-batch-size">Points batch size</label>
+                <input type="number" id="points-batch-size" value="200" min="1" max="5000">
+            </div>
+            <div>
+                <label for="article-mode">Тип прайса</label>
+                <select id="article-mode">
+                    <option value="price" selected>Прайс-лист</option>
+                    <option value="chint">CHINT</option>
+                    <option value="dkc">DKC</option>
+                </select>
+            </div>
+            <div>
+                <label for="sheet-name">Лист XLSX</label>
+                <select id="sheet-name" disabled>
+                    <option value="">Сначала выберите файл</option>
+                </select>
+            </div>
+            <div>
+                <label for="xlsx-file">XLSX файл</label>
+                <input type="file" id="xlsx-file" accept=".xlsx">
+            </div>
         </div>
 
-        <div class="tab-content active" id="tab-index">
+        <div class="section">
+            <button id="process-file">Считать заголовки</button>
+            <div class="status" id="status-text">Статус: ожидание файла.</div>
+            <div class="progress-bar"><div class="progress-fill" id="progress-fill"></div></div>
+            <div class="log-output" id="log-output">Логи загрузки появятся здесь.</div>
+        </div>
+
+        <div class="section">
+            <h2>Сопоставление столбцов</h2>
+            <div id="column-mappings" class="mappings"></div>
+            <button id="upload-data" style="display:none;">Загрузить данные</button>
+        </div>
+
+        <div class="section">
+            <h2>Поиск (основная коллекция)</h2>
             <div class="grid">
                 <div>
-                    <label for="collection-name">Имя коллекции</label>
-                    <input type="text" id="collection-name" value="my_collection">
-                    <div class="hint">Коллекция будет создана автоматически, если её нет.</div>
+                    <label for="main-search-query">Запрос</label>
+                    <input type="text" id="main-search-query" placeholder="Введите запрос">
                 </div>
                 <div>
-                    <label for="skip-rows">Пропустить верхние строки</label>
-                    <input type="number" id="skip-rows" value="0" min="0">
-                    <div class="hint">Количество строк перед заголовками.</div>
-                </div>
-                <div>
-                    <label for="batch-size">Batch size</label>
-                    <input type="number" id="batch-size" value="16" min="1" max="128">
-                    <div class="hint">Размер пачки для Ollama embeddings.</div>
-                </div>
-                <div>
-                    <label for="points-batch-size">Points batch size</label>
-                    <input type="number" id="points-batch-size" value="200" min="1" max="5000">
-                    <div class="hint">Размер чанка для записи в Qdrant.</div>
-                </div>
-                <div>
-                    <label for="article-mode">Тип прайса</label>
-                    <select id="article-mode">
-                        <option value="price" selected>Прайс-лист (без изменений)</option>
-                        <option value="chint">CHINT (суффикс CHINT)</option>
-                        <option value="dkc">DKC (префикс DKC)</option>
+                    <label for="main-search-mode">Режим</label>
+                    <select id="main-search-mode">
+                        <option value="hybrid" selected>Hybrid</option>
+                        <option value="dense">Dense</option>
+                        <option value="sparse">Sparse</option>
                     </select>
-                    <div class="hint">Приставка добавляется только в payload артикулов.</div>
                 </div>
                 <div>
-                    <label for="sheet-name">Лист XLSX</label>
-                    <select id="sheet-name" disabled>
-                        <option value="">Сначала выберите файл</option>
+                    <label for="main-search-in-stock">Только в наличии</label>
+                    <select id="main-search-in-stock">
+                        <option value="false" selected>Нет</option>
+                        <option value="true">Да</option>
                     </select>
-                    <div class="hint">Используется для основной загрузки.</div>
                 </div>
                 <div>
-                    <label for="xlsx-file">XLSX файл</label>
-                    <input type="file" id="xlsx-file" accept=".xlsx" />
-                    <div class="hint">Поддерживается только .xlsx.</div>
-                </div>
-            </div>
-
-            <div class="section">
-                <button id="process-file">Считать заголовки</button>
-                <div class="status" id="status-text">Статус: ожидание файла.</div>
-                <div class="progress-bar">
-                    <div class="progress-fill" id="progress-fill"></div>
-                </div>
-                <div class="log-output" id="log-output">Логи загрузки появятся здесь.</div>
-            </div>
-
-            <div class="section">
-                <h2>Сопоставление столбцов</h2>
-                <div id="column-mappings" class="mappings"></div>
-                <button id="upload-data" style="display:none;">Загрузить данные</button>
-            </div>
-
-            <div class="section">
-                <h2>Поиск (основная коллекция)</h2>
-                <div class="grid">
-                    <div>
-                        <label for="main-search-query">Запрос</label>
-                        <input type="text" id="main-search-query" placeholder="Введите запрос">
-                    </div>
-                    <div>
-                        <label for="main-search-mode">Режим</label>
-                        <select id="main-search-mode">
-                            <option value="hybrid" selected>Hybrid</option>
-                            <option value="dense">Dense</option>
-                            <option value="sparse">Sparse</option>
-                        </select>
-                    </div>
-                    <div>
-                        <label for="main-search-in-stock">Только в наличии</label>
-                        <select id="main-search-in-stock">
-                            <option value="false" selected>Нет</option>
-                            <option value="true">Да</option>
-                        </select>
-                    </div>
-                </div>
-                <button id="main-search-button" style="margin-top: 12px;">Искать</button>
-                <div class="status" id="main-search-status">Статус: ожидание запроса.</div>
-                <div class="log-output" id="main-search-output">Результаты появятся здесь.</div>
-            </div>
-        </div>
-
-        <div class="tab-content" id="tab-stock">
-            <div class="grid">
-                <div>
-                    <label for="stock-collection-name">Имя коллекции</label>
-                    <input type="text" id="stock-collection-name" value="my_collection">
-                    <div class="hint">Запись только в payload поля "Остаток".</div>
+                    <label for="main-search-limit">Лимит</label>
+                    <input type="number" id="main-search-limit" value="15" min="1" max="100">
                 </div>
                 <div>
-                    <label for="stock-skip-rows">Пропустить верхние строки</label>
-                    <input type="number" id="stock-skip-rows" value="0" min="0">
-                    <div class="hint">Количество строк перед заголовками.</div>
-                </div>
-                <div>
-                    <label for="stock-batch-size">Batch size</label>
-                    <input type="number" id="stock-batch-size" value="200" min="1" max="2000">
-                    <div class="hint">Размер пачки для обновления остатков.</div>
-                </div>
-                <div>
-                    <label for="stock-xlsx-file">XLSX файл</label>
-                    <input type="file" id="stock-xlsx-file" accept=".xlsx" />
-                    <div class="hint">Колонки выбираются вручную.</div>
+                    <label for="main-search-candidate-limit">Candidate limit</label>
+                    <input type="number" id="main-search-candidate-limit" value="20" min="1" max="200">
                 </div>
             </div>
-
-            <div class="section">
-                <button id="stock-process-file">Считать заголовки</button>
-                <div class="status" id="stock-status-text">Статус: ожидание файла.</div>
-                <div class="progress-bar">
-                    <div class="progress-fill" id="stock-progress-fill"></div>
-                </div>
-                <div class="log-output" id="stock-log-output">Логи обновления появятся здесь.</div>
-            </div>
-
-            <div class="section">
-                <h2>Сопоставление столбцов</h2>
-                <div id="stock-column-mappings" class="mappings"></div>
-                <button id="stock-upload-data" style="display:none;">Обновить остатки</button>
-            </div>
-        </div>
-
-        <div class="tab-content" id="tab-passports">
-            <div class="grid">
-                <div>
-                    <label for="passports-collection-name">Имя коллекции</label>
-                    <input type="text" id="passports-collection-name" value="passports_collection">
-                    <div class="hint">Коллекция для паспортов (PDF).</div>
-                </div>
-                <div>
-                    <label for="passports-batch-size">Batch size</label>
-                    <input type="number" id="passports-batch-size" value="8" min="1" max="32">
-                    <div class="hint">Размер пачки для эмбеддингов.</div>
-                </div>
-                <div>
-                    <label for="passports-points-batch-size">Points batch size</label>
-                    <input type="number" id="passports-points-batch-size" value="200" min="1" max="1000">
-                    <div class="hint">Размер чанка для записи в Qdrant.</div>
-                </div>
-                <div>
-                    <label for="passports-files">PDF паспорта (до 30)</label>
-                    <input type="file" id="passports-files" accept=".pdf" multiple />
-                    <div class="hint">Можно выбрать до 30 файлов за раз.</div>
-                </div>
-            </div>
-
-            <div class="section">
-                <button id="passports-upload-button">Загрузить паспорта</button>
-                <div class="status" id="passports-status-text">Статус: ожидание файлов.</div>
-                <div class="log-output" id="passports-log-output">Логи загрузки появятся здесь.</div>
-            </div>
-
-            <div class="section">
-                <h2>Поиск по паспортам (гибридный)</h2>
-                <div class="grid">
-                    <div>
-                        <label for="passports-search-query">Запрос</label>
-                        <input type="text" id="passports-search-query" placeholder="Введите запрос">
-                    </div>
-                    <div>
-                        <label for="passports-search-limit">Лимит</label>
-                        <input type="number" id="passports-search-limit" value="5" min="1" max="20">
-                    </div>
-                </div>
-                <button id="passports-search-button" style="margin-top: 12px;">Искать</button>
-                <div class="status" id="passports-search-status">Статус: ожидание запроса.</div>
-                <div class="log-output" id="passports-search-output">Результаты появятся здесь.</div>
-            </div>
-        </div>
-
-        <div class="tab-content" id="tab-delete">
-            <div class="grid">
-                <div>
-                    <label for="delete-collection-name">Имя коллекции</label>
-                    <input type="text" id="delete-collection-name" value="my_collection">
-                    <div class="hint">Будут удалены все векторы и индексы коллекции.</div>
-                </div>
-            </div>
-
-            <div class="section">
-                <button id="delete-collection-button" style="background: #ef4444;">Удалить коллекцию</button>
-                <div class="status" id="delete-status-text">Статус: ожидание.</div>
-                <div class="log-output" id="delete-log-output">Логи удаления появятся здесь.</div>
-            </div>
-        </div>
-
-        <div class="tab-content" id="tab-hf-cache">
-            <div class="grid">
-                <div>
-                    <label>Путь HF_HOME</label>
-                    <input type="text" id="hf-home-path" value="" readonly>
-                    <div class="hint">Директория для кэша моделей HuggingFace.</div>
-                </div>
-                <div>
-                    <label>Путь HF_HUB_CACHE</label>
-                    <input type="text" id="hf-hub-cache-path" value="" readonly>
-                    <div class="hint">Где хранятся веса моделей и токенизаторы.</div>
-                </div>
-                <div>
-                    <label>Размер кэша (MB)</label>
-                    <input type="text" id="hf-cache-size" value="" readonly>
-                    <div class="hint">Фактический размер модели/токенизатора на диске.</div>
-                </div>
-                <div>
-                    <label>Кол-во файлов</label>
-                    <input type="text" id="hf-cache-files" value="" readonly>
-                    <div class="hint">Количество файлов в кэше.</div>
-                </div>
-            </div>
-
-            <div class="section">
-                <button id="hf-cache-refresh">Обновить информацию</button>
-                <button id="hf-cache-clear" style="background: #ef4444;">Очистить HF‑кэш</button>
-                <div class="status" id="hf-cache-status">Статус: ожидание.</div>
-                <div class="log-output" id="hf-cache-log">Логи кэша появятся здесь.</div>
-            </div>
-        </div>
-
-        <div class="tab-content" id="tab-integrations">
-            <div class="section" style="margin-top:0; padding-top:0; border-top:none;">
-                <h2>Polza.ai (LLM)</h2>
-                <div class="grid">
-                    <div>
-                        <label for="polza-api-key">API key</label>
-                        <input type="password" id="polza-api-key" placeholder="pk_...">
-                        <div class="hint">Ключ хранится только в памяти backend (сбросится после рестарта).</div>
-                    </div>
-                    <div>
-                        <label for="polza-model">Модель</label>
-                        <input type="text" id="polza-model" value="openai/gpt-4o">
-                    </div>
-                    <div>
-                        <label for="polza-temperature">Temperature</label>
-                        <input type="number" id="polza-temperature" value="0.2" min="0" max="2" step="0.1">
-                    </div>
-                    <div>
-                        <label for="polza-max-tokens">Max tokens</label>
-                        <input type="number" id="polza-max-tokens" value="500" min="1">
-                    </div>
-                    <div>
-                        <label for="polza-base-url">Base URL</label>
-                        <input type="text" id="polza-base-url" value="https://polza.ai/api/v1/chat/completions">
-                    </div>
-                    <div>
-                        <label for="polza-api-key-masked">Текущий ключ</label>
-                        <input type="text" id="polza-api-key-masked" value="" readonly>
-                    </div>
-                </div>
-            </div>
-
-            <div class="section">
-                <h2>Bitrix24 Bot</h2>
-                <div class="grid">
-                    <div>
-                        <label for="bitrix-client-id">Client ID</label>
-                        <input type="text" id="bitrix-client-id" placeholder="local.xxxxx">
-                    </div>
-                    <div>
-                        <label for="bitrix-client-secret">Client Secret</label>
-                        <input type="password" id="bitrix-client-secret" placeholder="***">
-                    </div>
-                    <div>
-                        <label for="bitrix-client-secret-masked">Текущий secret</label>
-                        <input type="text" id="bitrix-client-secret-masked" value="" readonly>
-                    </div>
-                    <div>
-                        <label for="bitrix-redirect-uri">Redirect URI</label>
-                        <input type="text" id="bitrix-redirect-uri" placeholder="https://.../oauth/callback">
-                    </div>
-                    <div>
-                        <label for="bitrix-webhook-url">Webhook URL</label>
-                        <input type="text" id="bitrix-webhook-url" placeholder="https://your-domain/rest/...">
-                        <div class="hint">Используется для отправки ответов бота (`imbot.message.add`).</div>
-                    </div>
-                    <div>
-                        <label for="bitrix-portal-base-url">Portal Base URL</label>
-                        <input type="text" id="bitrix-portal-base-url" placeholder="https://your-domain.bitrix24.ru">
-                        <div class="hint">Нужно для OAuth-вызовов REST (если webhook не используется).</div>
-                    </div>
-                    <div>
-                        <label for="bitrix-oauth-auth-url">OAuth Authorize URL</label>
-                        <input type="text" id="bitrix-oauth-auth-url" value="https://oauth.bitrix.info/oauth/authorize/">
-                    </div>
-                    <div>
-                        <label for="bitrix-oauth-token-url">OAuth Token URL</label>
-                        <input type="text" id="bitrix-oauth-token-url" value="https://oauth.bitrix.info/oauth/token/">
-                    </div>
-                    <div>
-                        <label for="bitrix-bot-id">Bot ID</label>
-                        <input type="text" id="bitrix-bot-id" placeholder="62">
-                    </div>
-                    <div>
-                        <label for="bitrix-collection-name">Коллекция для /price</label>
-                        <input type="text" id="bitrix-collection-name" value="my_collection">
-                    </div>
-                    <div>
-                        <label for="bitrix-docs-collection-name">Коллекция для /search</label>
-                        <input type="text" id="bitrix-docs-collection-name" value="passports_collection">
-                    </div>
-                    <div>
-                        <label for="bitrix-search-mode">Режим поиска</label>
-                        <select id="bitrix-search-mode">
-                            <option value="hybrid" selected>Hybrid</option>
-                            <option value="dense">Dense</option>
-                            <option value="sparse">Sparse</option>
-                        </select>
-                    </div>
-                </div>
-            </div>
-
-            <div class="section">
-                <button id="integrations-refresh">Обновить настройки</button>
-                <button id="integrations-save">Сохранить настройки</button>
-                <button id="bitrix-oauth-connect">Подключить Bitrix24 (OAuth)</button>
-                <button id="bitrix-oauth-refresh">Обновить OAuth токен</button>
-                <button id="bitrix-oauth-status">Проверить OAuth статус</button>
-                <div class="status" id="integrations-status">Статус: ожидание.</div>
-                <div class="log-output" id="integrations-log">Логи интеграций появятся здесь.</div>
-            </div>
-        </div>
-
-        <div class="tab-content" id="tab-bot-tools">
-            <div class="section" style="margin-top:0; padding-top:0; border-top:none;">
-                <h2>Создание / обновление Bitrix24 бота</h2>
-                <div class="grid">
-                    <div>
-                        <label for="bot-tools-handler-url">Путь обработчика</label>
-                        <input type="text" id="bot-tools-handler-url" placeholder="https://btrs.monter.ru/bitrix/webhook">
-                        <div class="hint">Для EVENT_MESSAGE_ADD и EVENT_WELCOME_MESSAGE.</div>
-                    </div>
-                    <div>
-                        <label for="bot-tools-code">CODE (уникальный)</label>
-                        <input type="text" id="bot-tools-code" placeholder="my_bot_code">
-                    </div>
-                    <div>
-                        <label for="bot-tools-type">TYPE</label>
-                        <select id="bot-tools-type">
-                            <option value="B" selected>B (чат-бот)</option>
-                            <option value="H">H</option>
-                        </select>
-                    </div>
-                    <div>
-                        <label for="bot-tools-name">Имя бота (NAME)</label>
-                        <input type="text" id="bot-tools-name" value="RAG Bot">
-                    </div>
-                    <div>
-                        <label for="bot-tools-last-name">Фамилия/доп. имя (LAST_NAME)</label>
-                        <input type="text" id="bot-tools-last-name" value="">
-                    </div>
-                    <div>
-                        <label for="bot-tools-color">Цвет (COLOR)</label>
-                        <input type="text" id="bot-tools-color" value="AQUA">
-                    </div>
-                    <div>
-                        <label for="bot-tools-email">Email</label>
-                        <input type="text" id="bot-tools-email" value="">
-                    </div>
-                    <div>
-                        <label for="bot-tools-work-position">WORK_POSITION</label>
-                        <input type="text" id="bot-tools-work-position" value="Помощник по поиску">
-                    </div>
-                    <div>
-                        <label for="bot-tools-bot-id">Bot ID (для update)</label>
-                        <input type="text" id="bot-tools-bot-id" placeholder="62">
-                    </div>
-                </div>
-            </div>
-
-            <div class="section">
-                <button id="bot-tools-register">Создать бота (imbot.register)</button>
-                <button id="bot-tools-update">Обновить бота (imbot.update)</button>
-                <div class="status" id="bot-tools-status">Статус: ожидание.</div>
-                <div class="log-output" id="bot-tools-log">Логи создания/обновления бота появятся здесь.</div>
-            </div>
-
-            <div class="section">
-                <h2>Тестовый чат (веб-версия)</h2>
-                <div class="grid">
-                    <div>
-                        <label for="web-chat-dialog-id">Dialog ID (локальный)</label>
-                        <input type="text" id="web-chat-dialog-id" value="web-test-dialog">
-                    </div>
-                    <div>
-                        <label for="web-chat-message">Сообщение</label>
-                        <input type="text" id="web-chat-message" placeholder="/help">
-                    </div>
-                </div>
-                <button id="web-chat-send" style="margin-top: 12px;">Отправить в тестовый чат</button>
-                <div class="status" id="web-chat-status">Статус: ожидание команды.</div>
-                <div class="log-output" id="web-chat-log">История тестового чата появится здесь.</div>
-            </div>
+            <button id="main-search-button" style="margin-top: 12px;">Искать</button>
+            <div class="status" id="main-search-status">Статус: ожидание запроса.</div>
+            <div class="log-output" id="main-search-output">Результаты появятся здесь.</div>
+            <div class="log-output" id="main-search-debug" style="margin-top:10px;">Debug trace появится здесь.</div>
         </div>
     </div>
 
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.17.5/xlsx.full.min.js"></script>
-    <script src="/static/script.js"></script>
+    <div class="tab-content" id="tab-stock">
+        <div class="grid">
+            <div>
+                <label for="stock-collection-name">Имя коллекции</label>
+                <input type="text" id="stock-collection-name" value="CHINT">
+            </div>
+            <div>
+                <label for="stock-skip-rows">Пропустить верхние строки</label>
+                <input type="number" id="stock-skip-rows" value="0" min="0">
+            </div>
+            <div>
+                <label for="stock-batch-size">Batch size</label>
+                <input type="number" id="stock-batch-size" value="200" min="1" max="2000">
+            </div>
+            <div>
+                <label for="stock-xlsx-file">XLSX файл</label>
+                <input type="file" id="stock-xlsx-file" accept=".xlsx">
+            </div>
+        </div>
+
+        <div class="section">
+            <button id="stock-process-file">Считать заголовки</button>
+            <div class="status" id="stock-status-text">Статус: ожидание файла.</div>
+            <div class="progress-bar"><div class="progress-fill" id="stock-progress-fill"></div></div>
+            <div class="log-output" id="stock-log-output">Логи обновления появятся здесь.</div>
+        </div>
+
+        <div class="section">
+            <h2>Сопоставление столбцов</h2>
+            <div id="stock-column-mappings" class="mappings"></div>
+            <button id="stock-upload-data" style="display:none;">Обновить остатки</button>
+        </div>
+    </div>
+
+    <div class="tab-content" id="tab-passports">
+        <div class="grid">
+            <div>
+                <label for="passports-collection-name">Имя коллекции</label>
+                <input type="text" id="passports-collection-name" value="passports_collection">
+            </div>
+            <div>
+                <label for="passports-batch-size">Batch size</label>
+                <input type="number" id="passports-batch-size" value="8" min="1" max="32">
+            </div>
+            <div>
+                <label for="passports-points-batch-size">Points batch size</label>
+                <input type="number" id="passports-points-batch-size" value="200" min="1" max="1000">
+            </div>
+            <div>
+                <label for="passports-files">PDF паспорта (до 30)</label>
+                <input type="file" id="passports-files" accept=".pdf" multiple>
+            </div>
+        </div>
+
+        <div class="section">
+            <button id="passports-upload-button">Загрузить паспорта</button>
+            <div class="status" id="passports-status-text">Статус: ожидание файлов.</div>
+            <div class="log-output" id="passports-log-output">Логи загрузки появятся здесь.</div>
+        </div>
+
+        <div class="section">
+            <h2>Поиск по паспортам</h2>
+            <div class="grid">
+                <div>
+                    <label for="passports-search-query">Запрос</label>
+                    <input type="text" id="passports-search-query" placeholder="Введите запрос">
+                </div>
+                <div>
+                    <label for="passports-search-limit">Лимит</label>
+                    <input type="number" id="passports-search-limit" value="5" min="1" max="20">
+                </div>
+            </div>
+            <button id="passports-search-button" style="margin-top: 12px;">Искать</button>
+            <div class="status" id="passports-search-status">Статус: ожидание запроса.</div>
+            <div class="log-output" id="passports-search-output">Результаты появятся здесь.</div>
+        </div>
+    </div>
+
+    <div class="tab-content" id="tab-delete">
+        <div class="grid">
+            <div>
+                <label for="delete-collection-name">Имя коллекции</label>
+                <input type="text" id="delete-collection-name" value="CHINT">
+            </div>
+        </div>
+        <div class="section">
+            <button id="delete-collection-button" style="background: #ef4444;">Удалить коллекцию</button>
+            <div class="status" id="delete-status-text">Статус: ожидание.</div>
+            <div class="log-output" id="delete-log-output">Логи удаления появятся здесь.</div>
+        </div>
+    </div>
+
+    <div class="tab-content" id="tab-ai">
+        <div class="section" style="margin-top:0;padding-top:0;border-top:none;">
+            <h2>AI настройки</h2>
+            <div class="grid">
+                <div>
+                    <label for="ai-endpoint">AI Endpoint</label>
+                    <input type="text" id="ai-endpoint" value="https://polza.ai/api/v1">
+                </div>
+                <div>
+                    <label for="ai-model">Модель</label>
+                    <input type="text" id="ai-model" value="openai/gpt-4o">
+                </div>
+                <div>
+                    <label for="ai-api-key">API Key</label>
+                    <input type="text" id="ai-api-key" placeholder="Введите API ключ">
+                </div>
+                <div>
+                    <label for="orchestrator-url">Orchestrator URL</label>
+                    <input type="text" id="orchestrator-url" value="http://localhost:8430">
+                </div>
+                <div>
+                    <label for="ai-collection-name">Имя коллекции</label>
+                    <input type="text" id="ai-collection-name" value="CHINT">
+                </div>
+                <div>
+                    <label for="ai-probable-limit">Вероятные замены (top-N)</label>
+                    <input type="number" id="ai-probable-limit" value="3" min="1" max="10">
+                </div>
+            </div>
+            <button id="ai-save-settings" style="margin-top:12px;">Сохранить настройки</button>
+            <div class="status" id="ai-settings-status">Статус: настройки не сохранены.</div>
+        </div>
+
+        <div class="section">
+            <h2>Тестовый чат-бот</h2>
+            <label for="ai-message">Сообщение</label>
+            <textarea id="ai-message" placeholder="Например: Автомат 16А 4 шт; Контактор 25А 2 шт; Кабель 3х2.5 100 м"></textarea>
+            <div style="display:flex; gap:10px; margin-top:12px; flex-wrap:wrap;">
+                <button id="ai-send-chat">Отправить в /agent/chat</button>
+                <button id="ai-send-spec">Сформировать спецификацию (/agent/spec)</button>
+            </div>
+            <div class="status" id="ai-chat-status">Статус: ожидание запроса.</div>
+            <div class="log-output" id="ai-chat-output">Ответы AI появятся здесь.</div>
+            <div class="hint">Если вернётся файл спецификации, появится ссылка на скачивание.</div>
+        </div>
+    </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.17.5/xlsx.full.min.js"></script>
+<script src="/static/script.js"></script>
 </body>
 </html>

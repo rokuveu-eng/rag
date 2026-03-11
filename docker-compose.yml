@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   qdrant:
     image: qdrant/qdrant:latest
@@ -9,20 +7,43 @@ services:
     volumes:
       - qdrant_storage:/qdrant/storage
 
+  ollama:
+    image: ollama/ollama:latest
+    restart: unless-stopped
+    ports:
+      - "11434:11434"
+    gpus: all
+    volumes:
+      - ollama_data:/root/.ollama
+
   api:
     build: .
     restart: unless-stopped
     ports:
       - "8424:8424"
     environment:
-      HF_HOME: /root/.cache/huggingface
-      HF_HUB_CACHE: /root/.cache/huggingface/hub
-      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL}
-    volumes:
-      - hf_cache:/root/.cache/huggingface
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434}
     depends_on:
       - qdrant
+      - ollama
+
+  orchestrator:
+    build:
+      context: ./orchestrator
+    restart: unless-stopped
+    ports:
+      - "8430:8430"
+    environment:
+      CATALOG_API_URL: ${CATALOG_API_URL:-http://api:8424}
+      AI_BASE_URL: ${AI_BASE_URL:-https://polza.ai/api/v1}
+      AI_MODEL: ${AI_MODEL:-openai/gpt-4o}
+      SPEC_DIR: /app/specs
+    depends_on:
+      - api
+    volumes:
+      - orchestrator_specs:/app/specs
 
 volumes:
   qdrant_storage:
-  hf_cache:
+  ollama_data:
+  orchestrator_specs:
