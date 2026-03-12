@@ -6,7 +6,7 @@ import re
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
 from fastapi import FastAPI, HTTPException
@@ -14,12 +14,17 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from openpyxl import Workbook
 from pydantic import BaseModel, Field
+from redis import asyncio as redis_async
 
 
 CATALOG_API_URL = os.getenv("CATALOG_API_URL", "http://api:8424").rstrip("/")
 DEFAULT_AI_BASE_URL = os.getenv("AI_BASE_URL", "https://polza.ai/api/v1").rstrip("/")
 DEFAULT_AI_MODEL = os.getenv("AI_MODEL", "openai/gpt-4o")
 SPEC_DIR = Path(os.getenv("SPEC_DIR", "/app/specs"))
+REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379/0")
+MEMORY_TTL_SEC = int(os.getenv("MEMORY_TTL_SEC", "86400"))
+MEMORY_MAX_TURNS = int(os.getenv("MEMORY_MAX_TURNS", "8"))
+MEMORY_PREFIX = os.getenv("MEMORY_PREFIX", "mem")
 SPEC_DIR.mkdir(parents=True, exist_ok=True)
 
 
@@ -32,6 +37,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+redis_client: Optional[redis_async.Redis] = None
+
 
 class AgentRequest(BaseModel):
     message: str = Field(..., min_length=1)
@@ -40,6 +47,14 @@ class AgentRequest(BaseModel):
     ai_api_key: Optional[str] = None
     ai_model: Optional[str] = None
     probable_limit: int = Field(3, ge=1, le=10)
+    tenant_id: str = Field("default", min_length=1)
+    dialog_id: Optional[str] = None
+    reset_memory: bool = False
+
+
+class MemoryResetRequest(BaseModel):
+    tenant_id: str = Field(..., min_length=1)
+    dialog_id: str = Field(..., min_length=1)
 
 
 class ParsedItem(BaseModel):
@@ -122,7 +137,66 @@ def fallback_parse_items(message: str) -> List[ParsedItem]:
     return items
 
 
-async def parse_items_with_llm(req: AgentRequest) -> (List[ParsedItem], Dict[str, Any]):
+def memory_key(tenant_id: str, dialog_id: str) -> str:
+    return f"{MEMORY_PREFIX}:{tenant_id}:{dialog_id}"
+
+
+async def get_redis_client() -> Optional[redis_async.Redis]:
+    global redis_client
+    if not REDIS_URL:
+        return None
+    if redis_client is None:
+        redis_client = redis_async.from_url(REDIS_URL, decode_responses=True)
+    return redis_client
+
+
+async def load_short_memory(tenant_id: str, dialog_id: str) -> List[Dict[str, str]]:
+    client = await get_redis_client()
+    if not client:
+        return []
+    raw = await client.get(memory_key(tenant_id, dialog_id))
+    if not raw:
+        return []
+    try:
+        data = json.loads(raw)
+        if isinstance(data, list):
+            return [
+                {
+                    "role": str(item.get("role") or ""),
+                    "content": str(item.get("content") or ""),
+                }
+                for item in data
+                if isinstance(item, dict)
+            ]
+    except Exception:
+        return []
+    return []
+
+
+async def append_short_memory(tenant_id: str, dialog_id: str, role: str, content: str) -> None:
+    if not content.strip():
+        return
+    client = await get_redis_client()
+    if not client:
+        return
+    history = await load_short_memory(tenant_id, dialog_id)
+    history.append({"role": role, "content": content.strip()})
+    history = history[-MEMORY_MAX_TURNS:]
+    await client.setex(memory_key(tenant_id, dialog_id), MEMORY_TTL_SEC, json.dumps(history, ensure_ascii=False))
+
+
+async def reset_short_memory(tenant_id: str, dialog_id: str) -> bool:
+    client = await get_redis_client()
+    if not client:
+        return False
+    deleted = await client.delete(memory_key(tenant_id, dialog_id))
+    return bool(deleted)
+
+
+async def parse_items_with_llm(
+    req: AgentRequest,
+    memory_context: Optional[List[Dict[str, str]]] = None,
+) -> Tuple[List[ParsedItem], Dict[str, Any]]:
     ai_base_url = (req.ai_base_url or DEFAULT_AI_BASE_URL).rstrip("/")
     ai_model = req.ai_model or DEFAULT_AI_MODEL
     if not req.ai_api_key:
@@ -154,19 +228,26 @@ async def parse_items_with_llm(req: AgentRequest) -> (List[ParsedItem], Dict[str
         },
     }
 
+    messages: List[Dict[str, str]] = [
+        {
+            "role": "system",
+            "content": (
+                "Ты парсер заявок по электротехническому прайс-листу. "
+                "Верни только JSON по схеме. qty всегда число. "
+                "Если количество не указано, qty=1 и unit='шт'."
+            ),
+        }
+    ]
+    for turn in (memory_context or [])[-MEMORY_MAX_TURNS:]:
+        role = str(turn.get("role") or "").strip().lower()
+        content = str(turn.get("content") or "").strip()
+        if role in {"user", "assistant"} and content:
+            messages.append({"role": role, "content": content})
+    messages.append({"role": "user", "content": req.message})
+
     payload = {
         "model": ai_model,
-        "messages": [
-            {
-                "role": "system",
-                "content": (
-                    "Ты парсер заявок по электротехническому прайс-листу. "
-                    "Верни только JSON по схеме. qty всегда число. "
-                    "Если количество не указано, qty=1 и unit='шт'."
-                ),
-            },
-            {"role": "user", "content": req.message},
-        ],
+        "messages": messages,
         "response_format": {"type": "json_schema", "json_schema": schema},
         "temperature": 0,
     }
@@ -183,7 +264,12 @@ async def parse_items_with_llm(req: AgentRequest) -> (List[ParsedItem], Dict[str
         if not items:
             raise ValueError("LLM returned empty items")
         usage = data.get("usage", {})
-        return items, {"parser": "llm", "usage": usage, "model": data.get("model")}
+        return items, {
+            "parser": "llm",
+            "usage": usage,
+            "model": data.get("model"),
+            "memory_turns_used": len((memory_context or [])[-MEMORY_MAX_TURNS:]),
+        }
     except Exception:
         return fallback_parse_items(req.message), {"parser": "fallback", "reason": "llm_parse_failed"}
 
@@ -366,7 +452,14 @@ def write_spec_xlsx(rows: List[RowResult]) -> str:
 
 
 async def run_agent(req: AgentRequest, force_spec: bool = False) -> Dict[str, Any]:
-    items, parser_meta = await parse_items_with_llm(req)
+    if req.reset_memory and req.dialog_id:
+        await reset_short_memory(req.tenant_id, req.dialog_id)
+
+    memory_context: List[Dict[str, str]] = []
+    if req.dialog_id:
+        memory_context = await load_short_memory(req.tenant_id, req.dialog_id)
+
+    items, parser_meta = await parse_items_with_llm(req, memory_context=memory_context)
     rows: List[RowResult] = []
     for item in items:
         search_payload = await catalog_search(item.query_text, req.collection_name)
@@ -377,8 +470,13 @@ async def run_agent(req: AgentRequest, force_spec: bool = False) -> Dict[str, An
     should_build_spec = force_spec or len(items) > 2
     spec_file_id = write_spec_xlsx(rows) if should_build_spec else None
 
+    reply_text = build_reply(rows, parser_meta, spec_file_id)
+    if req.dialog_id:
+        await append_short_memory(req.tenant_id, req.dialog_id, "user", req.message)
+        await append_short_memory(req.tenant_id, req.dialog_id, "assistant", reply_text)
+
     return {
-        "reply_text": build_reply(rows, parser_meta, spec_file_id),
+        "reply_text": reply_text,
         "items_count": len(items),
         "rows": [
             {
@@ -399,13 +497,29 @@ async def run_agent(req: AgentRequest, force_spec: bool = False) -> Dict[str, An
         ],
         "spec_file_id": spec_file_id,
         "spec_download_url": f"/agent/files/{spec_file_id}" if spec_file_id else None,
-        "debug": parser_meta,
+        "debug": {
+            **parser_meta,
+            "memory_enabled": bool(REDIS_URL),
+            "memory_ttl_sec": MEMORY_TTL_SEC,
+            "memory_dialog_id": req.dialog_id,
+        },
     }
 
 
 @app.get("/health")
 async def health():
     return {"status": "ok"}
+
+
+@app.post("/memory/reset")
+async def memory_reset(req: MemoryResetRequest):
+    deleted = await reset_short_memory(req.tenant_id, req.dialog_id)
+    return {
+        "status": "ok",
+        "tenant_id": req.tenant_id,
+        "dialog_id": req.dialog_id,
+        "deleted": deleted,
+    }
 
 
 @app.post("/agent/chat")

@@ -20,6 +20,8 @@ docker compose up -d --build
 - Ollama (локально, GPU): http://localhost:11434
 - API + UI: http://localhost:8424
 - AI Orchestrator: http://localhost:8430
+- Redis (память): http://localhost:6379
+- Bitrix Adapter: http://localhost:8440
 
 ### GPU для Ollama
 
@@ -47,7 +49,14 @@ docker compose up -d --build
 
 - `POST /agent/chat`
 - `POST /agent/spec`
+- `POST /memory/reset`
 - `GET /agent/files/{file_id}`
+- `GET /health`
+
+### Эндпоинты Bitrix Adapter
+
+- `POST /bitrix/webhook`
+- `POST /bitrix/send-test`
 - `GET /health`
 
 Параметры `GET /search`:
@@ -96,6 +105,31 @@ curl -s "http://localhost:8424/search?query=автомат%2016а&collection_nam
 }
 ```
 
+Дополнительные поля для памяти в `/agent/chat`:
+- `tenant_id` — идентификатор tenant/портала (по умолчанию `default`)
+- `dialog_id` — идентификатор диалога (если передан, включается краткая память)
+- `reset_memory` — если `true`, очистить память диалога перед обработкой
+
+Пример:
+
+```json
+{
+  "message": "подбери автомат 16А",
+  "collection_name": "CHINT",
+  "tenant_id": "my-company",
+  "dialog_id": "chat123",
+  "reset_memory": false
+}
+```
+
+Сброс краткой памяти:
+
+```bash
+curl -s -X POST "http://localhost:8430/memory/reset" \
+  -H "Content-Type: application/json" \
+  -d '{"tenant_id":"my-company","dialog_id":"chat123"}' | jq
+```
+
 Если позиций больше 2 (или вызван `/agent/spec`) будет сформирован xlsx-файл
 с колонками: `Запрос`, `Артикул замены`, `Наименование замены`, `Score`, `ScoreNorm(0..1)`, `Цена`, `Кол-во`, `Сумма`, `Вероятные замены`, `Dense top`, `Sparse top`, `Hybrid top`.
 
@@ -112,3 +146,19 @@ curl -s "http://localhost:8424/search?query=автомат%2016а&collection_nam
 - вкладка **Паспорта**;
 - вкладка **AI чат** (настройки endpoint/API key/model + тестовый чат);
 - вкладка **Удаление**.
+
+## Bitrix24 интеграция и память
+
+В `docker-compose.yml` добавлены сервисы:
+- `redis` — хранение краткой LLM-памяти;
+- `bitrix-adapter` — webhook-адаптер Bitrix24.
+
+Ключевые переменные окружения Bitrix Adapter:
+- `BITRIX_WEBHOOK_URL` — базовый webhook URL Bitrix24 (без `/imbot.message.add` в конце),
+- `BITRIX_BOT_ID` — ID чат-бота (опционально),
+- `BITRIX_CLIENT_ID` — CLIENT_ID для webhook-вызовов (если требуется),
+- `BITRIX_WEBHOOK_VERIFY_TOKEN` — токен верификации входящего webhook.
+
+Поведение команды `/reset`:
+- если в входящем сообщении из Bitrix24 текст `/reset`, адаптер вызывает `POST /memory/reset` в orchestrator;
+- после успешного сброса отправляет подтверждение в диалог Bitrix24.
