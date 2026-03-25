@@ -702,39 +702,79 @@ def extract_docx_text(contents: bytes) -> str:
     try:
         from docx import Document
         from PIL import Image
+        import zipfile
+        import xml.etree.ElementTree as ET
 
-        doc = Document(BytesIO(contents))
+        # First try python-docx (works for most .docx files)
         parts = []
-        for p in doc.paragraphs:
-            t = p.text.strip()
-            if t:
-                parts.append(t)
-
-        # attempt to extract images and OCR them
-        ocr_texts = []
         try:
-            for rel in doc.part.rels.values():
-                try:
-                    if getattr(rel, "target_part", None) and getattr(rel.target_part, "content_type", "").startswith("image"):
-                        blob = rel.target_part.blob
+            doc = Document(BytesIO(contents))
+            for p in doc.paragraphs:
+                t = p.text.strip()
+                if t:
+                    parts.append(t)
+
+            # attempt to extract images referenced by relationships and OCR them
+            ocr_texts = []
+            try:
+                for rel in doc.part.rels.values():
+                    try:
+                        target = getattr(rel, "target_part", None)
+                        content_type = getattr(target, "content_type", "")
+                        if target is not None and content_type.startswith("image"):
+                            blob = target.blob
+                            try:
+                                img = Image.open(BytesIO(blob))
+                                txt = pytesseract.image_to_string(img, lang="rus+eng") or ""
+                                if txt.strip():
+                                    ocr_texts.append(txt.strip())
+                            except Exception:
+                                logger.debug("Failed OCR image in docx (doc.part)", exc_info=True)
+                    except Exception:
+                        continue
+            except Exception:
+                logger.debug("No images extracted from docx via doc.part", exc_info=True)
+
+            if ocr_texts:
+                parts.append("\n".join(ocr_texts))
+
+        except Exception:
+            logger.debug("python-docx path failed, will try zip/xml fallback", exc_info=True)
+
+        # If python-docx didn't yield text, try unzip and parse document.xml
+        if not parts:
+            try:
+                with zipfile.ZipFile(BytesIO(contents)) as z:
+                    # extract document.xml text nodes
+                    if "word/document.xml" in z.namelist():
+                        xml_bytes = z.read("word/document.xml")
+                        # parse XML and extract text from w:t elements
+                        ns = {"w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main"}
+                        root = ET.fromstring(xml_bytes)
+                        texts = [t.text for t in root.findall('.//w:t', ns) if t.text]
+                        if texts:
+                            parts.extend([t.strip() for t in texts if t.strip()])
+
+                    # OCR images in word/media/
+                    media_files = [name for name in z.namelist() if name.startswith("word/media/")]
+                    ocr_texts = []
+                    for m in media_files:
                         try:
+                            blob = z.read(m)
                             img = Image.open(BytesIO(blob))
                             txt = pytesseract.image_to_string(img, lang="rus+eng") or ""
                             if txt.strip():
                                 ocr_texts.append(txt.strip())
                         except Exception:
-                            logger.debug("Failed OCR image in docx", exc_info=True)
-                except Exception:
-                    continue
-        except Exception:
-            logger.debug("No images extracted from docx or error iterating rels", exc_info=True)
-
-        if ocr_texts:
-            parts.append("\n".join(ocr_texts))
+                            logger.debug("Failed OCR media image %s", m, exc_info=True)
+                    if ocr_texts:
+                        parts.append("\n".join(ocr_texts))
+            except Exception:
+                logger.debug("zip/xml fallback for docx failed", exc_info=True)
 
         return "\n".join(parts).strip()
     except Exception:
-        logger.debug("extract_docx_text failed", exc_info=True)
+        logger.debug("extract_docx_text failed (final)", exc_info=True)
         return ""
 
 
@@ -781,7 +821,7 @@ def chunk_text(text: str, *, max_chars: int = 2000, overlap: int = 200) -> List[
     return chunks
 
 
-def build_passport_documents(file_entries: List[tuple]):
+def build_passport_documents(file_entries: List[tuple], job_id: Optional[str] = None):
     documents = []
     payloads = []
     skipped = 0
@@ -809,12 +849,24 @@ def build_passport_documents(file_entries: List[tuple]):
             text = ocr_pdf_bytes(contents)
             src = 'auto'
         if not text:
-            # log snippet for diagnostics
+            # log snippet for diagnostics and save the original file for inspection
             try:
                 head = contents[:512]
                 logger.warning("Skipped file %s — no text extracted; head=%s", filename, head[:128])
             except Exception:
                 logger.warning("Skipped file %s — no text extracted", filename)
+
+            try:
+                failed_dir = os.path.join("failed_uploads")
+                os.makedirs(failed_dir, exist_ok=True)
+                safe_name = f"{job_id or 'noj'}_{uuid.uuid4().hex}_{os.path.basename(filename)}"
+                failed_path = os.path.join(failed_dir, safe_name)
+                with open(failed_path, "wb") as wf:
+                    wf.write(contents)
+                logger.info("Saved skipped file to %s", failed_path)
+            except Exception:
+                logger.exception("Failed to save skipped file %s", filename)
+
             skipped += 1
             continue
         chunks = chunk_text(text)
@@ -846,9 +898,9 @@ async def process_passports_upload(
     if points_batch_size <= 0:
         raise HTTPException(status_code=400, detail="points_batch_size must be > 0")
 
-    documents, payloads, skipped = build_passport_documents(file_entries)
+    documents, payloads, skipped = build_passport_documents(file_entries, job_id=job_id)
     if not documents:
-        raise HTTPException(status_code=400, detail="No text extracted from PDF files")
+        raise HTTPException(status_code=400, detail="No text extracted from uploaded files")
 
     total_start = perf_counter()
     indexed = 0
