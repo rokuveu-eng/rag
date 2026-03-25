@@ -156,6 +156,46 @@ async def get_ollama_embeddings(texts, concurrency=4):
         return await asyncio.gather(*(fetch_one(text) for text in texts))
 
 
+    async def call_ollama_generate(prompt: str, model: str = None, timeout: int = 60) -> Optional[str]:
+        """Call Ollama (or OpenAI-compatible) generate/completions endpoint with a prompt.
+        Tries several endpoints and returns text or None on failure.
+        """
+        mdl = model or os.getenv('OLLAMA_MODEL', 'qwen3.5:9b')
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            # try Ollama simple API
+            try:
+                url = f"{ollama_base_url.rstrip('/')}/api/generate"
+                resp = await client.post(url, json={"model": mdl, "prompt": prompt})
+                if resp.status_code < 400:
+                    data = resp.json()
+                    # Ollama /api/generate may return { "text": "..." } or other shape
+                    if isinstance(data, dict):
+                        if 'text' in data:
+                            return data['text']
+                        if 'result' in data and isinstance(data['result'], dict) and 'content' in data['result']:
+                            return data['result']['content']
+                    # fallback to raw text
+                    return resp.text
+            except Exception:
+                logger.debug('ollama /api/generate not available', exc_info=True)
+
+            # try OpenAI-compatible chat completions
+            try:
+                url = f"{ollama_base_url.rstrip('/')}/v1/chat/completions"
+                body = {"model": mdl, "messages": [{"role": "user", "content": prompt}], "max_tokens": 512}
+                resp = await client.post(url, json=body)
+                if resp.status_code < 400:
+                    data = resp.json()
+                    # OpenAI-like response
+                    if 'choices' in data and isinstance(data['choices'], list) and data['choices']:
+                        text = data['choices'][0].get('message', {}).get('content') or data['choices'][0].get('text')
+                        return text
+            except Exception:
+                logger.debug('ollama openai-compatible endpoint failed', exc_info=True)
+
+        return None
+
+
 async def get_ollama_embedding(text: str):
     embeddings = await get_ollama_embeddings([text])
     return embeddings[0]
@@ -1132,28 +1172,81 @@ async def process_passports_upload(
         })
 
     # First: create and upsert document-level embeddings (one per doc)
-    # Automatic category classification using embeddings (override simple keyword heuristics)
+    # Try to classify each document via the LLM and produce a fullcontext description.
     try:
-        categories = ['general', 'logistics', 'payment', 'warranty', 'safety']
-        # compute embeddings for summaries and category labels together
-        if docs_meta:
-            doc_ids = list(docs_meta.keys())
-            summaries = [docs_meta[d]['summary'] for d in doc_ids]
-            combined = summaries + categories
-            emb_all = await get_ollama_embeddings(combined)
-            doc_embs = emb_all[: len(summaries)]
-            cat_embs = emb_all[len(summaries) :]
-            for i, did in enumerate(doc_ids):
-                best_label = 'general'
-                best_score = -1.0
-                for c_name, c_emb in zip(categories, cat_embs):
-                    score = cosine_similarity(doc_embs[i], c_emb)
-                    if score > best_score:
-                        best_score = score
-                        best_label = c_name
-                docs_meta[did]['category'] = best_label
+        # fetch existing categories from qdrant (document-level points)
+        existing_categories = set()
+        try:
+            scroll_res = qdrant_client.scroll(collection_name=collection_name, with_payload=True, with_vectors=False, limit=1000)[0]
+            for p in scroll_res:
+                payload = getattr(p, 'payload', {}) or {}
+                if payload.get('is_doc') and payload.get('category'):
+                    existing_categories.add(str(payload.get('category')).lower())
+        except Exception:
+            logger.debug('Failed to fetch existing categories from Qdrant', exc_info=True)
+
+        doc_ids = list(docs_meta.keys())
+        summaries = [docs_meta[d]['summary'] for d in doc_ids]
+
+        # For each document, call the LLM to get category + fullcontext
+        for did, summary, in zip(doc_ids, summaries):
+            full = docs_meta[did].get('full_text', '')
+            prompt = (
+                "Определи короткую категорию (одно слово или короткая фраза) для документа на русском языке,"
+                " используя существующие категории, если они похожи. Если похожей нет, предложи новую категорию."
+                " Верни JSON с полями: category и fullcontext. \n"
+                f"Существующие категории: {', '.join(sorted(existing_categories)) or 'нет'}.\n"
+                "Документ (summary):\n" + summary[:2000] + "\n---\nПолный текст:\n" + (full[:8000] or '')
+            )
+            try:
+                out = await call_ollama_generate(prompt, timeout=60)
+                assigned_cat = None
+                fullcontext = None
+                if out:
+                    # attempt to extract JSON object from response
+                    try:
+                        # find first { ... }
+                        m = re.search(r"\{[\s\S]*\}", out)
+                        if m:
+                            parsed = json.loads(m.group(0))
+                            assigned_cat = parsed.get('category') or parsed.get('Category')
+                            fullcontext = parsed.get('fullcontext') or parsed.get('fullContext') or parsed.get('description')
+                    except Exception:
+                        # fallback: simple heuristics: first line -> category, rest -> description
+                        lines = [ln.strip() for ln in out.splitlines() if ln.strip()]
+                        if lines:
+                            assigned_cat = lines[0].split()[0]
+                            fullcontext = '\n'.join(lines[1:])[:2000]
+                if not assigned_cat:
+                    # fallback to embedding-based classification used before
+                    try:
+                        cats = ['general', 'logistics', 'payment', 'warranty', 'safety']
+                        emb_all = await get_ollama_embeddings([summary] + cats)
+                        doc_emb = emb_all[0]
+                        cat_embs = emb_all[1:]
+                        best = 0
+                        best_label = 'general'
+                        for c_name, c_emb in zip(cats, cat_embs):
+                            sc = cosine_similarity(doc_emb, c_emb)
+                            if sc > best:
+                                best = sc
+                                best_label = c_name
+                        assigned_cat = best_label
+                    except Exception:
+                        assigned_cat = docs_meta[did].get('category', 'general')
+
+                assigned_cat = (assigned_cat or 'general').lower()
+                docs_meta[did]['category'] = assigned_cat
+                if fullcontext:
+                    docs_meta[did]['fullcontext'] = fullcontext
+                else:
+                    docs_meta[did]['fullcontext'] = docs_meta[did]['summary']
+            except Exception:
+                logger.exception('LLM doc classification failed for doc %s', did)
+                docs_meta[did]['category'] = docs_meta[did].get('category', 'general')
+                docs_meta[did]['fullcontext'] = docs_meta[did]['summary']
     except Exception:
-        logger.exception("Failed to classify document categories via embeddings")
+        logger.exception("Document-level LLM classification failed")
 
     try:
         doc_ids = list(docs_meta.keys())
@@ -1196,6 +1289,21 @@ async def process_passports_upload(
                 values=sparse_vector.values.tolist(),
             )
             payload = batch_payloads[offset]
+            # run LLM to classify the chunk's role relative to the full document
+            try:
+                chunk_prompt = (
+                    "Дан документ (кратко):\n" + (docs_meta.get(payload.get('doc_id', ''), {}).get('fullcontext') or docs_meta.get(payload.get('doc_id', ''), {}).get('summary', ''))[:2000]
+                    + "\n---\nДан отрывок (chunk):\n" + (payload.get('text') or '')[:2000]
+                    + "\nОтветь одной короткой фразой, чему посвящён этот отрывок относительно всего документа (на русском).\n"
+                )
+                gen = await call_ollama_generate(chunk_prompt, timeout=30)
+                if gen:
+                    # take first non-empty line
+                    lines = [ln.strip() for ln in gen.splitlines() if ln.strip()]
+                    if lines:
+                        payload['chunk_context'] = lines[0][:500]
+            except Exception:
+                logger.debug('Chunk LLM labelling failed; keeping chunk_context fallback', exc_info=True)
             point_id = str(uuid.uuid4())
             batch_points.append(
                 models.PointStruct(
