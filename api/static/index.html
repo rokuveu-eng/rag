@@ -146,10 +146,6 @@
                 <input type="text" id="kb-file-types" placeholder=".pdf,.docx,.txt (оставьте пустым для всех)">
             </div>
             <div>
-                <label for="kb-category">Категория (по умолчанию)</label>
-                <input type="text" id="kb-category" placeholder="optional category (logistics, payment, warranty)">
-            </div>
-            <div>
                 <label for="kb-batch-size">Batch size</label>
                 <input type="number" id="kb-batch-size" value="8" min="1" max="128">
             </div>
@@ -342,25 +338,6 @@
                 <div>
                     <label for="passports-search-limit">Лимит</label>
                     <input type="number" id="passports-search-limit" value="5" min="1" max="20">
-                </div>
-                <div>
-                    <label for="passports-search-category">Категория</label>
-                    <input type="text" id="passports-search-category" placeholder="optional category">
-                </div>
-                <div>
-                    <label for="passports-by-document">По документам (doc→chunks)</label>
-                    <select id="passports-by-document">
-                        <option value="false" selected>Нет</option>
-                        <option value="true">Да</option>
-                    </select>
-                </div>
-                <div>
-                    <label for="passports-doc-top-k">Top docs (stage1)</label>
-                    <input type="number" id="passports-doc-top-k" value="5" min="1" max="50">
-                </div>
-                <div>
-                    <label for="passports-chunks-per-doc">Chunks per doc</label>
-                    <input type="number" id="passports-chunks-per-doc" value="3" min="1" max="10">
                 </div>
             </div>
             <button id="passports-search-button" style="margin-top: 12px;">Искать</button>

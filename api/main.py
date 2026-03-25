@@ -156,46 +156,6 @@ async def get_ollama_embeddings(texts, concurrency=4):
         return await asyncio.gather(*(fetch_one(text) for text in texts))
 
 
-    async def call_ollama_generate(prompt: str, model: str = None, timeout: int = 60) -> Optional[str]:
-        """Call Ollama (or OpenAI-compatible) generate/completions endpoint with a prompt.
-        Tries several endpoints and returns text or None on failure.
-        """
-        mdl = model or os.getenv('OLLAMA_MODEL', 'qwen3.5:9b')
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            # try Ollama simple API
-            try:
-                url = f"{ollama_base_url.rstrip('/')}/api/generate"
-                resp = await client.post(url, json={"model": mdl, "prompt": prompt})
-                if resp.status_code < 400:
-                    data = resp.json()
-                    # Ollama /api/generate may return { "text": "..." } or other shape
-                    if isinstance(data, dict):
-                        if 'text' in data:
-                            return data['text']
-                        if 'result' in data and isinstance(data['result'], dict) and 'content' in data['result']:
-                            return data['result']['content']
-                    # fallback to raw text
-                    return resp.text
-            except Exception:
-                logger.debug('ollama /api/generate not available', exc_info=True)
-
-            # try OpenAI-compatible chat completions
-            try:
-                url = f"{ollama_base_url.rstrip('/')}/v1/chat/completions"
-                body = {"model": mdl, "messages": [{"role": "user", "content": prompt}], "max_tokens": 512}
-                resp = await client.post(url, json=body)
-                if resp.status_code < 400:
-                    data = resp.json()
-                    # OpenAI-like response
-                    if 'choices' in data and isinstance(data['choices'], list) and data['choices']:
-                        text = data['choices'][0].get('message', {}).get('content') or data['choices'][0].get('text')
-                        return text
-            except Exception:
-                logger.debug('ollama openai-compatible endpoint failed', exc_info=True)
-
-        return None
-
-
 async def get_ollama_embedding(text: str):
     embeddings = await get_ollama_embeddings([text])
     return embeddings[0]
@@ -1002,42 +962,29 @@ def chunk_text(text: str, *, max_chars: int = 2000, overlap: int = 200) -> List[
 
 
 def build_passport_documents(file_entries: List[tuple], job_id: Optional[str] = None):
-    """
-    Build chunk documents and collect per-document metadata.
-    Returns: (documents, payloads, skipped, docs_meta)
-    docs_meta: {doc_id: {file_name, download_url, full_text, summary, category}}
-    """
-    documents: List[str] = []
-    payloads: List[Dict[str, Any]] = []
+    documents = []
+    payloads = []
     skipped = 0
-    docs_meta: Dict[str, Dict[str, Any]] = {}
-
-    def categorize_document(text_snippet: str) -> str:
-        txt = (text_snippet or '').lower()
-        mapping = {
-            'logistics': ['доставка', 'отгрузк', 'логист', 'терминал', 'самовывоз'],
-            'payment': ['оплат', 'счет', 'безнал', 'наличн'],
-            'warranty': ['гарант', 'ремонт', 'сервис'],
-            'safety': ['техника безопасности', 'охрана труда', 'требован'],
-        }
-        for cat, keywords in mapping.items():
-            for kw in keywords:
-                if kw in txt:
-                    return cat
-        return 'general'
-
     for entry in file_entries:
-        if not (isinstance(entry, (tuple, list)) and len(entry) >= 2):
-            logger.warning("Skipped invalid file entry: %s", entry)
+        download_url = None
+        # support entries as (filename, contents) or (filename, contents, download_url)
+        if isinstance(entry, tuple) or isinstance(entry, list):
+            if len(entry) >= 2:
+                filename = entry[0]
+                contents = entry[1]
+                if len(entry) >= 3:
+                    download_url = entry[2]
+            else:
+                logger.warning("Skipped invalid file entry (too few elements): %s", entry)
+                skipped += 1
+                continue
+        else:
+            logger.warning("Skipped invalid file entry (not tuple): %s", type(entry))
             skipped += 1
             continue
-
-        filename, contents = entry[0], entry[1]
-        download_url = entry[2] if len(entry) >= 3 else None
-
-        lower = (filename or '').lower()
-        text = ''
-        src = 'auto'
+        lower = (filename or "").lower()
+        text = ""
+        src = "auto"
         if lower.endswith('.pdf'):
             text = ocr_pdf_bytes(contents)
             src = 'pdf'
@@ -1054,10 +1001,11 @@ def build_passport_documents(file_entries: List[tuple], job_id: Optional[str] = 
             except Exception:
                 text = ''
         else:
+            # try pdf/image fallbacks
             text = ocr_pdf_bytes(contents)
             src = 'auto'
-
         if not text:
+            # log snippet for diagnostics and save the original file for inspection
             try:
                 head = contents[:512]
                 logger.warning("Skipped file %s — no text extracted; head=%s", filename, head[:128])
@@ -1065,11 +1013,11 @@ def build_passport_documents(file_entries: List[tuple], job_id: Optional[str] = 
                 logger.warning("Skipped file %s — no text extracted", filename)
 
             try:
-                failed_dir = os.path.join('failed_uploads')
+                failed_dir = os.path.join("failed_uploads")
                 os.makedirs(failed_dir, exist_ok=True)
                 safe_name = f"{job_id or 'noj'}_{uuid.uuid4().hex}_{os.path.basename(filename)}"
                 failed_path = os.path.join(failed_dir, safe_name)
-                with open(failed_path, 'wb') as wf:
+                with open(failed_path, "wb") as wf:
                     wf.write(contents)
                 logger.info("Saved skipped file to %s", failed_path)
             except Exception:
@@ -1077,203 +1025,60 @@ def build_passport_documents(file_entries: List[tuple], job_id: Optional[str] = 
 
             skipped += 1
             continue
-
-        # deterministic doc id from download_url or filename
-        base_for_id = download_url or filename or str(uuid.uuid4())
-        doc_id = str(uuid.uuid5(uuid.NAMESPACE_URL, base_for_id))
-
-        # aggregate full text per document
-        if doc_id not in docs_meta:
-            docs_meta[doc_id] = {"file_name": filename, "download_url": download_url, "full_text": text}
-        else:
-            docs_meta[doc_id]["full_text"] += '\n' + text
-
-        # create summary (extractive)
-        try:
-            sentences = re.split(r'(?<=[.!?])\s+', text.strip())
-            if len(sentences) <= 3:
-                summary = ' '.join(sentences)[:1200]
-            else:
-                summary = ' '.join(sentences[:3])[:1200]
-        except Exception:
-            summary = (text or '')[:1200]
-
-        docs_meta[doc_id]['summary'] = summary
-        docs_meta[doc_id]['category'] = categorize_document(summary)
-
         chunks = chunk_text(text)
         if not chunks:
             skipped += 1
             continue
-
         for chunk_index, chunk in enumerate(chunks, start=1):
             documents.append(chunk)
-            # compute chunk_context as surrounding window in the full document
-            full = docs_meta[doc_id].get('full_text', '')
-            window = 400
-            try:
-                idx = full.find(chunk)
-                if idx != -1:
-                    start_ctx = max(0, idx - window)
-                    end_ctx = min(len(full), idx + len(chunk) + window)
-                    chunk_context = full[start_ctx:end_ctx].strip()
-                else:
-                    # fallback to chunk plus neighbors
-                    start_ctx = max(0, chunk_index - 2)
-                    end_ctx = min(len(chunks), chunk_index + 1)
-                    chunk_context = ' '.join(chunks[start_ctx:end_ctx])
-            except Exception:
-                chunk_context = chunk
-
             p = {
-                'file_name': filename,
-                'source': src,
-                'text': chunk,
-                'chunk_id': chunk_index,
-                'chunks_total': len(chunks),
-                'doc_id': doc_id,
-                'category': docs_meta[doc_id]['category'],
-                'is_doc': False,
-                'chunk_context': chunk_context,
-                'doc_full_text': (full or '')[:8000],
+                "file_name": filename,
+                "source": src,
+                "text": chunk,
+                "chunk_id": chunk_index,
+                "chunks_total": len(chunks),
             }
-            if download_url:
-                p['download_url'] = download_url
+            # if this file entry included a download_url, attach it
+            try:
+                # support entries that are (filename, contents, download_url)
+                # locate corresponding original tuple in file_entries
+                # if file_entries elements are tuples of length>=3, use their 3rd element
+                # iterate to find matching filename and contents
+                for ent in file_entries:
+                    if isinstance(ent, tuple) and len(ent) >= 3 and ent[0] == filename:
+                        p["download_url"] = ent[2]
+                        break
+            except Exception:
+                pass
             payloads.append(p)
-
-    return documents, payloads, skipped, docs_meta
+    return documents, payloads, skipped
 
 
 async def process_passports_upload(
     *,
     file_entries: List[tuple],
     collection_name: str,
-    batch_size: int = 8,
-    points_batch_size: int = 200,
+    batch_size: int,
+    points_batch_size: int,
     job_id: Optional[str] = None,
 ):
-    """
-    Ingest chunks and also add document-level points (summaries + category).
-    """
-    create_collection(collection_name)
+    if points_batch_size <= 0:
+        raise HTTPException(status_code=400, detail="points_batch_size must be > 0")
 
-    documents, payloads, skipped, docs_meta = build_passport_documents(file_entries, job_id=job_id)
+    documents, payloads, skipped = build_passport_documents(file_entries, job_id=job_id)
+    if not documents:
+        raise HTTPException(status_code=400, detail="No text extracted from uploaded files")
 
-    total_chunks = len(documents)
-    indexed = 0
     total_start = perf_counter()
+    indexed = 0
+    total_chunks = len(documents)
 
     if job_id:
-        passports_jobs[job_id].update({
-            'status': 'running',
-            'progress': 0,
-            'indexed_chunks': 0,
-            'total_chunks': total_chunks,
-        })
+        passports_jobs[job_id].update(
+            {"status": "running", "progress": 0, "indexed_chunks": 0, "total_chunks": total_chunks}
+        )
 
-    # First: create and upsert document-level embeddings (one per doc)
-    # Try to classify each document via the LLM and produce a fullcontext description.
-    try:
-        # fetch existing categories from qdrant (document-level points)
-        existing_categories = set()
-        try:
-            scroll_res = qdrant_client.scroll(collection_name=collection_name, with_payload=True, with_vectors=False, limit=1000)[0]
-            for p in scroll_res:
-                payload = getattr(p, 'payload', {}) or {}
-                if payload.get('is_doc') and payload.get('category'):
-                    existing_categories.add(str(payload.get('category')).lower())
-        except Exception:
-            logger.debug('Failed to fetch existing categories from Qdrant', exc_info=True)
-
-        doc_ids = list(docs_meta.keys())
-        summaries = [docs_meta[d]['summary'] for d in doc_ids]
-
-        # For each document, call the LLM to get category + fullcontext
-        for did, summary, in zip(doc_ids, summaries):
-            full = docs_meta[did].get('full_text', '')
-            prompt = (
-                "Определи короткую категорию (одно слово или короткая фраза) для документа на русском языке,"
-                " используя существующие категории, если они похожи. Если похожей нет, предложи новую категорию."
-                " Верни JSON с полями: category и fullcontext. \n"
-                f"Существующие категории: {', '.join(sorted(existing_categories)) or 'нет'}.\n"
-                "Документ (summary):\n" + summary[:2000] + "\n---\nПолный текст:\n" + (full[:8000] or '')
-            )
-            try:
-                out = await call_ollama_generate(prompt, timeout=60)
-                assigned_cat = None
-                fullcontext = None
-                if out:
-                    # attempt to extract JSON object from response
-                    try:
-                        # find first { ... }
-                        m = re.search(r"\{[\s\S]*\}", out)
-                        if m:
-                            parsed = json.loads(m.group(0))
-                            assigned_cat = parsed.get('category') or parsed.get('Category')
-                            fullcontext = parsed.get('fullcontext') or parsed.get('fullContext') or parsed.get('description')
-                    except Exception:
-                        # fallback: simple heuristics: first line -> category, rest -> description
-                        lines = [ln.strip() for ln in out.splitlines() if ln.strip()]
-                        if lines:
-                            assigned_cat = lines[0].split()[0]
-                            fullcontext = '\n'.join(lines[1:])[:2000]
-                if not assigned_cat:
-                    # fallback to embedding-based classification used before
-                    try:
-                        cats = ['general', 'logistics', 'payment', 'warranty', 'safety']
-                        emb_all = await get_ollama_embeddings([summary] + cats)
-                        doc_emb = emb_all[0]
-                        cat_embs = emb_all[1:]
-                        best = 0
-                        best_label = 'general'
-                        for c_name, c_emb in zip(cats, cat_embs):
-                            sc = cosine_similarity(doc_emb, c_emb)
-                            if sc > best:
-                                best = sc
-                                best_label = c_name
-                        assigned_cat = best_label
-                    except Exception:
-                        assigned_cat = docs_meta[did].get('category', 'general')
-
-                assigned_cat = (assigned_cat or 'general').lower()
-                docs_meta[did]['category'] = assigned_cat
-                if fullcontext:
-                    docs_meta[did]['fullcontext'] = fullcontext
-                else:
-                    docs_meta[did]['fullcontext'] = docs_meta[did]['summary']
-            except Exception:
-                logger.exception('LLM doc classification failed for doc %s', did)
-                docs_meta[did]['category'] = docs_meta[did].get('category', 'general')
-                docs_meta[did]['fullcontext'] = docs_meta[did]['summary']
-    except Exception:
-        logger.exception("Document-level LLM classification failed")
-
-    try:
-        doc_ids = list(docs_meta.keys())
-        summaries = [docs_meta[d]['summary'] for d in doc_ids]
-        if summaries:
-            doc_embeddings = await get_ollama_embeddings(summaries)
-            doc_points = []
-            for did, emb in zip(doc_ids, doc_embeddings):
-                meta = docs_meta[did]
-                payload = {
-                    'is_doc': True,
-                    'doc_id': did,
-                    'file_name': meta.get('file_name'),
-                    'download_url': meta.get('download_url'),
-                    'doc_summary': meta.get('summary'),
-                    'category': meta.get('category'),
-                }
-                doc_points.append(
-                    models.PointStruct(id=f"doc-{did}", vector={"text-dense": emb}, payload=payload)
-                )
-            if doc_points:
-                safe_upsert(collection_name, doc_points)
-    except Exception:
-        logger.exception("Failed to create document-level points")
-
-    # Now ingest chunk-level points in batches
-    for start in range(0, total_chunks, batch_size):
+    for start in range(0, len(documents), batch_size):
         batch_docs = documents[start : start + batch_size]
         batch_payloads = payloads[start : start + batch_size]
 
@@ -1288,28 +1093,11 @@ async def process_passports_upload(
                 indices=sparse_vector.indices.tolist(),
                 values=sparse_vector.values.tolist(),
             )
-            payload = batch_payloads[offset]
-            # run LLM to classify the chunk's role relative to the full document
-            try:
-                chunk_prompt = (
-                    "Дан документ (кратко):\n" + (docs_meta.get(payload.get('doc_id', ''), {}).get('fullcontext') or docs_meta.get(payload.get('doc_id', ''), {}).get('summary', ''))[:2000]
-                    + "\n---\nДан отрывок (chunk):\n" + (payload.get('text') or '')[:2000]
-                    + "\nОтветь одной короткой фразой, чему посвящён этот отрывок относительно всего документа (на русском).\n"
-                )
-                gen = await call_ollama_generate(chunk_prompt, timeout=30)
-                if gen:
-                    # take first non-empty line
-                    lines = [ln.strip() for ln in gen.splitlines() if ln.strip()]
-                    if lines:
-                        payload['chunk_context'] = lines[0][:500]
-            except Exception:
-                logger.debug('Chunk LLM labelling failed; keeping chunk_context fallback', exc_info=True)
-            point_id = str(uuid.uuid4())
             batch_points.append(
                 models.PointStruct(
-                    id=point_id,
+                    id=str(uuid.uuid4()),
                     vector={"text-dense": dense_vector, "text-sparse": qdrant_sparse_vector},
-                    payload=payload,
+                    payload=batch_payloads[offset],
                 )
             )
 
@@ -1319,26 +1107,26 @@ async def process_passports_upload(
             indexed += len(chunk)
 
             if job_id and total_chunks:
-                percent = (indexed / total_chunks) * 100 if total_chunks else 100
+                percent = (indexed / total_chunks) * 100
                 passports_jobs[job_id].update(
                     {
-                        'status': 'running',
-                        'progress': round(percent, 2),
-                        'indexed_chunks': indexed,
-                        'total_chunks': total_chunks,
+                        "status": "running",
+                        "progress": round(percent, 2),
+                        "indexed_chunks": indexed,
+                        "total_chunks": total_chunks,
                     }
                 )
 
     duration = perf_counter() - total_start
     result = {
-        'status': 'success',
-        'indexed_chunks': indexed,
-        'skipped_files': skipped,
-        'total_chunks': total_chunks,
-        'duration_sec': round(duration, 3),
+        "status": "success",
+        "indexed_chunks": indexed,
+        "skipped_files": skipped,
+        "total_chunks": total_chunks,
+        "duration_sec": round(duration, 3),
     }
     if job_id:
-        passports_jobs[job_id].update({'status': 'completed', 'progress': 100, **result})
+        passports_jobs[job_id].update({"status": "completed", "progress": 100, **result})
     return result
 
 
@@ -1429,12 +1217,8 @@ async def passports_status(job_id: str):
 async def search_passports(
     query: str = Query(...),
     collection_name: str = Query(...),
-    limit: int = Query(5, ge=1, le=50),
+    limit: int = Query(5, ge=1, le=20),
     only_payload: bool = Query(False),
-    by_document: bool = Query(False, description="If true, perform doc->passage two-stage retrieval"),
-    category: Optional[str] = Query(None, description="Optional category filter to restrict search"),
-    doc_top_k: int = Query(5, ge=1, le=50, description="How many top documents to retrieve in stage 1"),
-    chunks_per_doc: int = Query(3, ge=1, le=10, description="How many chunks to fetch per top doc"),
 ):
     dense_vector = await get_ollama_embedding(query)
     sparse_vector_gen = list(sparse_embedding_model.embed([query]))[0]
@@ -1443,159 +1227,20 @@ async def search_passports(
         values=sparse_vector_gen.values.tolist(),
     )
 
-    # If category not provided, try to classify the query via LLM and use that category
-    query_filter = None
-    classified_category = None
-    if not category:
-        try:
-            # gather existing categories from doc-level points
-            existing_categories = set()
-            try:
-                sc = qdrant_client.scroll(collection_name=collection_name, with_payload=True, with_vectors=False, limit=2000)[0]
-                for p in sc:
-                    payload = getattr(p, 'payload', {}) or {}
-                    if payload.get('is_doc') and payload.get('category'):
-                        existing_categories.add(str(payload.get('category')).lower())
-            except Exception:
-                logger.debug('Failed to read categories from Qdrant for classification', exc_info=True)
-
-            cat_list = ', '.join(sorted(existing_categories)) if existing_categories else 'none'
-            prompt = (
-                "К какому типу/категории относится этот запрос? Верни JSON {\"category\": \"label\"}."
-                " Если категория похожа на одну из существующих, используй её. Если похожей нет, предложи новую короткую категорию."
-                f"\nСуществующие категории: {cat_list}.\nЗапрос: {query}"
-            )
-            out = await call_ollama_generate(prompt, timeout=20)
-            if out:
-                try:
-                    m = re.search(r"\{[\s\S]*\}", out)
-                    if m:
-                        parsed = json.loads(m.group(0))
-                        classified_category = parsed.get('category')
-                except Exception:
-                    # fallback: take first token/word from LLM output
-                    lines = [ln.strip() for ln in out.splitlines() if ln.strip()]
-                    if lines:
-                        classified_category = lines[0].split()[0]
-            if classified_category:
-                classified_category = str(classified_category).lower()
-                # if it's new, create a placeholder document-level point so category exists
-                if classified_category not in existing_categories:
-                    try:
-                        emb = await get_ollama_embedding(classified_category)
-                        cat_point = models.PointStruct(
-                            id=f"cat-{uuid.uuid4().hex}",
-                            vector={"text-dense": emb},
-                            payload={"is_doc": True, "category": classified_category, "doc_summary": "(auto-created category)"},
-                        )
-                        safe_upsert(collection_name, [cat_point])
-                    except Exception:
-                        logger.exception('Failed to create placeholder category point')
-                category = classified_category
-        except Exception:
-            logger.exception('Query classification failed')
-
-    if category:
-        query_filter = models.Filter(must=[models.FieldCondition(key="category", match=models.MatchValue(value=category))])
-
-    if not by_document:
-        points = qdrant_client.query_points(
-            collection_name=collection_name,
-            prefetch=[
-                models.Prefetch(query=sparse_vector, using="text-sparse", limit=limit),
-                models.Prefetch(query=dense_vector, using="text-dense", limit=limit),
-            ],
-            query=models.FusionQuery(fusion=models.Fusion.RRF),
-            limit=limit,
-            with_payload=True,
-            with_vectors=True,
-            query_filter=query_filter,
-        ).points
-        if only_payload:
-            return {"results": [getattr(p, "payload", {}) for p in points], "classified_category": classified_category}
-        return {"results": points, "classified_category": classified_category}
-
-    # by_document two-stage retrieval
-    # Stage 1: retrieve top documents (points where is_doc == True)
-    doc_filter_components = [models.FieldCondition(key="is_doc", match=models.MatchValue(value=True))]
-    if category:
-        doc_filter_components.append(models.FieldCondition(key="category", match=models.MatchValue(value=category)))
-    doc_filter = models.Filter(must=doc_filter_components)
-
-    dense_docs = qdrant_client.query_points(
+    points = qdrant_client.query_points(
         collection_name=collection_name,
-        query=dense_vector,
-        using="text-dense",
-        limit=doc_top_k,
+        prefetch=[
+            models.Prefetch(query=sparse_vector, using="text-sparse", limit=limit),
+            models.Prefetch(query=dense_vector, using="text-dense", limit=limit),
+        ],
+        query=models.FusionQuery(fusion=models.Fusion.RRF),
+        limit=limit,
         with_payload=True,
-        query_filter=doc_filter,
+        with_vectors=True,
     ).points
-    sparse_docs = qdrant_client.query_points(
-        collection_name=collection_name,
-        query=sparse_vector,
-        using="text-sparse",
-        limit=doc_top_k,
-        with_payload=True,
-        query_filter=doc_filter,
-    ).points
-
-    # fuse doc scores via RRF-like weighting
-    dense_rank = {p.id: i + 1 for i, p in enumerate(dense_docs)}
-    sparse_rank = {p.id: i + 1 for i, p in enumerate(sparse_docs)}
-    rank_constant = 60.0
-
-    def rrf(rank_value: Optional[int]) -> float:
-        if not rank_value:
-            return 0.0
-        return 1.0 / (rank_constant + float(rank_value))
-
-    doc_candidates = {p.id: p for p in dense_docs}
-    for p in sparse_docs:
-        if p.id not in doc_candidates:
-            doc_candidates[p.id] = p
-
-    weighted_scores = {}
-    for pid in doc_candidates:
-        weighted_scores[pid] = (rrf(dense_rank.get(pid)) * 0.8) + (rrf(sparse_rank.get(pid)) * 0.2)
-
-    ranked_doc_ids = sorted(weighted_scores.keys(), key=lambda k: weighted_scores[k], reverse=True)[:doc_top_k]
-    top_docs = [doc_candidates[did] for did in ranked_doc_ids]
-
-    # Stage 2: for each top doc, fetch top chunks restricted to doc_id
-    final_chunks = []
-    for doc_point in top_docs:
-        doc_payload = getattr(doc_point, 'payload', {}) or {}
-        did = doc_payload.get('doc_id') or (str(doc_point.id).replace('doc-', ''))
-        chunk_filter = models.Filter(must=[models.FieldCondition(key='doc_id', match=models.MatchValue(value=did))])
-        if category:
-            chunk_filter.must.append(models.FieldCondition(key='category', match=models.MatchValue(value=category)))
-
-        chunks = qdrant_client.query_points(
-            collection_name=collection_name,
-            query=dense_vector,
-            using='text-dense',
-            limit=chunks_per_doc,
-            with_payload=True,
-            with_vectors=True,
-            query_filter=chunk_filter,
-        ).points
-        # attach parent doc metadata
-        for c in chunks:
-            if not c.payload:
-                c.payload = {}
-            c.payload['_parent_doc'] = {
-                'doc_id': did,
-                'file_name': doc_payload.get('file_name'),
-                'doc_summary': doc_payload.get('doc_summary'),
-                'category': doc_payload.get('category'),
-            }
-            final_chunks.append(c)
-
-    # limit to requested number
-    results = final_chunks[:limit]
     if only_payload:
-        return {"results": [getattr(p, 'payload', {}) for p in results], "classified_category": classified_category}
-    return {"results": results, "classified_category": classified_category}
+        return {"results": [getattr(p, "payload", {}) for p in points]}
+    return {"results": points}
 
 
 async def run_catalog_search(

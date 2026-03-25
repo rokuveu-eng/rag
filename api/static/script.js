@@ -132,10 +132,6 @@ const passportsBatchSizeInput = document.getElementById('passports-batch-size');
 const passportsPointsBatchSizeInput = document.getElementById('passports-points-batch-size');
 const passportsSearchQueryInput = document.getElementById('passports-search-query');
 const passportsSearchLimitInput = document.getElementById('passports-search-limit');
-const passportsSearchCategoryInput = document.getElementById('passports-search-category');
-const passportsByDocumentInput = document.getElementById('passports-by-document');
-const passportsDocTopKInput = document.getElementById('passports-doc-top-k');
-const passportsChunksPerDocInput = document.getElementById('passports-chunks-per-doc');
 
 const mainSearchQueryInput = document.getElementById('main-search-query');
 const mainSearchModeInput = document.getElementById('main-search-mode');
@@ -154,7 +150,6 @@ const kbBatchSizeInput = document.getElementById('kb-batch-size');
 const kbPointsBatchSizeInput = document.getElementById('kb-points-batch-size');
 const kbUseOcrInput = document.getElementById('kb-use-ocr');
 const kbImportButton = document.getElementById('kb-import-button');
-const kbCategoryInput = document.getElementById('kb-category');
 const kbWebhookInput = document.getElementById('kb-webhook-url');
 const kbFolderIdInput = document.getElementById('kb-folder-id');
 const kbFileTypesInput = document.getElementById('kb-file-types');
@@ -433,7 +428,6 @@ if (kbUploadButton) {
         const fd = new FormData();
         for (const f of kbFilesInput.files) fd.append('files', f, f.name);
         fd.append('collection_name', collection);
-        if (kbCategoryInput?.value) fd.append('category', kbCategoryInput.value.trim());
         fd.append('batch_size', String(batchSize));
         fd.append('points_batch_size', String(pointsBatch));
 
@@ -472,7 +466,6 @@ if (kbImportButton) {
         if (webhook) fd.append('webhook_url', webhook);
         fd.append('folder_id', folderId);
         fd.append('collection_name', collection);
-        if (kbCategoryInput?.value) fd.append('category', kbCategoryInput.value.trim());
         if (fileTypes) fd.append('file_types', fileTypes);
         fd.append('batch_size', String(batchSize));
         fd.append('points_batch_size', String(pointsBatch));
@@ -693,25 +686,10 @@ if (passportsSearchButton) {
         if (!q) return alert('Введите запрос');
         const collection = passportsCollectionInput?.value || 'passports_collection';
         const limit = passportsSearchLimitInput?.value || '5';
-        const category = passportsSearchCategoryInput?.value?.trim() || '';
-        const byDocument = passportsByDocumentInput?.value === 'true';
-        const docTopK = passportsDocTopKInput?.value || '5';
-        const chunksPerDoc = passportsChunksPerDocInput?.value || '3';
 
         try {
             setStatus(passportsSearchStatus, 'поиск...');
-            const params = new URLSearchParams({
-                collection_name: collection,
-                query: q,
-                limit: String(limit),
-            });
-            if (category) params.append('category', category);
-            if (byDocument) {
-                params.append('by_document', 'true');
-                params.append('doc_top_k', String(docTopK));
-                params.append('chunks_per_doc', String(chunksPerDoc));
-            }
-            const payload = await fetchJson(`/search_passports?${params.toString()}`);
+            const payload = await fetchJson(`/search_passports?collection_name=${encodeURIComponent(collection)}&query=${encodeURIComponent(q)}&limit=${encodeURIComponent(limit)}`);
             const results = payload.results || [];
             if (!results.length) {
                 passportsSearchOutput.textContent = 'Ничего не найдено';
