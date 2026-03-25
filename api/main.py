@@ -962,29 +962,42 @@ def chunk_text(text: str, *, max_chars: int = 2000, overlap: int = 200) -> List[
 
 
 def build_passport_documents(file_entries: List[tuple], job_id: Optional[str] = None):
-    documents = []
-    payloads = []
+    """
+    Build chunk documents and collect per-document metadata.
+    Returns: (documents, payloads, skipped, docs_meta)
+    docs_meta: {doc_id: {file_name, download_url, full_text, summary, category}}
+    """
+    documents: List[str] = []
+    payloads: List[Dict[str, Any]] = []
     skipped = 0
+    docs_meta: Dict[str, Dict[str, Any]] = {}
+
+    def categorize_document(text_snippet: str) -> str:
+        txt = (text_snippet or '').lower()
+        mapping = {
+            'logistics': ['доставка', 'отгрузк', 'логист', 'терминал', 'самовывоз'],
+            'payment': ['оплат', 'счет', 'безнал', 'наличн'],
+            'warranty': ['гарант', 'ремонт', 'сервис'],
+            'safety': ['техника безопасности', 'охрана труда', 'требован'],
+        }
+        for cat, keywords in mapping.items():
+            for kw in keywords:
+                if kw in txt:
+                    return cat
+        return 'general'
+
     for entry in file_entries:
-        download_url = None
-        # support entries as (filename, contents) or (filename, contents, download_url)
-        if isinstance(entry, tuple) or isinstance(entry, list):
-            if len(entry) >= 2:
-                filename = entry[0]
-                contents = entry[1]
-                if len(entry) >= 3:
-                    download_url = entry[2]
-            else:
-                logger.warning("Skipped invalid file entry (too few elements): %s", entry)
-                skipped += 1
-                continue
-        else:
-            logger.warning("Skipped invalid file entry (not tuple): %s", type(entry))
+        if not (isinstance(entry, (tuple, list)) and len(entry) >= 2):
+            logger.warning("Skipped invalid file entry: %s", entry)
             skipped += 1
             continue
-        lower = (filename or "").lower()
-        text = ""
-        src = "auto"
+
+        filename, contents = entry[0], entry[1]
+        download_url = entry[2] if len(entry) >= 3 else None
+
+        lower = (filename or '').lower()
+        text = ''
+        src = 'auto'
         if lower.endswith('.pdf'):
             text = ocr_pdf_bytes(contents)
             src = 'pdf'
@@ -1001,11 +1014,10 @@ def build_passport_documents(file_entries: List[tuple], job_id: Optional[str] = 
             except Exception:
                 text = ''
         else:
-            # try pdf/image fallbacks
             text = ocr_pdf_bytes(contents)
             src = 'auto'
+
         if not text:
-            # log snippet for diagnostics and save the original file for inspection
             try:
                 head = contents[:512]
                 logger.warning("Skipped file %s — no text extracted; head=%s", filename, head[:128])
@@ -1013,11 +1025,11 @@ def build_passport_documents(file_entries: List[tuple], job_id: Optional[str] = 
                 logger.warning("Skipped file %s — no text extracted", filename)
 
             try:
-                failed_dir = os.path.join("failed_uploads")
+                failed_dir = os.path.join('failed_uploads')
                 os.makedirs(failed_dir, exist_ok=True)
                 safe_name = f"{job_id or 'noj'}_{uuid.uuid4().hex}_{os.path.basename(filename)}"
                 failed_path = os.path.join(failed_dir, safe_name)
-                with open(failed_path, "wb") as wf:
+                with open(failed_path, 'wb') as wf:
                     wf.write(contents)
                 logger.info("Saved skipped file to %s", failed_path)
             except Exception:
@@ -1025,60 +1037,131 @@ def build_passport_documents(file_entries: List[tuple], job_id: Optional[str] = 
 
             skipped += 1
             continue
+
+        # deterministic doc id from download_url or filename
+        base_for_id = download_url or filename or str(uuid.uuid4())
+        doc_id = str(uuid.uuid5(uuid.NAMESPACE_URL, base_for_id))
+
+        # aggregate full text per document
+        if doc_id not in docs_meta:
+            docs_meta[doc_id] = {"file_name": filename, "download_url": download_url, "full_text": text}
+        else:
+            docs_meta[doc_id]["full_text"] += '\n' + text
+
+        # create summary (extractive)
+        try:
+            sentences = re.split(r'(?<=[.!?])\s+', text.strip())
+            if len(sentences) <= 3:
+                summary = ' '.join(sentences)[:1200]
+            else:
+                summary = ' '.join(sentences[:3])[:1200]
+        except Exception:
+            summary = (text or '')[:1200]
+
+        docs_meta[doc_id]['summary'] = summary
+        docs_meta[doc_id]['category'] = categorize_document(summary)
+
         chunks = chunk_text(text)
         if not chunks:
             skipped += 1
             continue
+
         for chunk_index, chunk in enumerate(chunks, start=1):
             documents.append(chunk)
             p = {
-                "file_name": filename,
-                "source": src,
-                "text": chunk,
-                "chunk_id": chunk_index,
-                "chunks_total": len(chunks),
+                'file_name': filename,
+                'source': src,
+                'text': chunk,
+                'chunk_id': chunk_index,
+                'chunks_total': len(chunks),
+                'doc_id': doc_id,
+                'category': docs_meta[doc_id]['category'],
+                'is_doc': False,
             }
-            # if this file entry included a download_url, attach it
-            try:
-                # support entries that are (filename, contents, download_url)
-                # locate corresponding original tuple in file_entries
-                # if file_entries elements are tuples of length>=3, use their 3rd element
-                # iterate to find matching filename and contents
-                for ent in file_entries:
-                    if isinstance(ent, tuple) and len(ent) >= 3 and ent[0] == filename:
-                        p["download_url"] = ent[2]
-                        break
-            except Exception:
-                pass
+            if download_url:
+                p['download_url'] = download_url
             payloads.append(p)
-    return documents, payloads, skipped
+
+    return documents, payloads, skipped, docs_meta
 
 
 async def process_passports_upload(
     *,
     file_entries: List[tuple],
     collection_name: str,
-    batch_size: int,
-    points_batch_size: int,
+    batch_size: int = 8,
+    points_batch_size: int = 200,
     job_id: Optional[str] = None,
 ):
-    if points_batch_size <= 0:
-        raise HTTPException(status_code=400, detail="points_batch_size must be > 0")
+    """
+    Ingest chunks and also add document-level points (summaries + category).
+    """
+    create_collection(collection_name)
 
-    documents, payloads, skipped = build_passport_documents(file_entries, job_id=job_id)
-    if not documents:
-        raise HTTPException(status_code=400, detail="No text extracted from uploaded files")
+    documents, payloads, skipped, docs_meta = build_passport_documents(file_entries, job_id=job_id)
 
-    total_start = perf_counter()
-    indexed = 0
     total_chunks = len(documents)
+    indexed = 0
+    total_start = perf_counter()
 
     if job_id:
-        passports_jobs[job_id].update(
-            {"status": "running", "progress": 0, "indexed_chunks": 0, "total_chunks": total_chunks}
-        )
+        passports_jobs[job_id].update({
+            'status': 'running',
+            'progress': 0,
+            'indexed_chunks': 0,
+            'total_chunks': total_chunks,
+        })
 
-    for start in range(0, len(documents), batch_size):
+    # First: create and upsert document-level embeddings (one per doc)
+    # Automatic category classification using embeddings (override simple keyword heuristics)
+    try:
+        categories = ['general', 'logistics', 'payment', 'warranty', 'safety']
+        # compute embeddings for summaries and category labels together
+        if docs_meta:
+            doc_ids = list(docs_meta.keys())
+            summaries = [docs_meta[d]['summary'] for d in doc_ids]
+            combined = summaries + categories
+            emb_all = await get_ollama_embeddings(combined)
+            doc_embs = emb_all[: len(summaries)]
+            cat_embs = emb_all[len(summaries) :]
+            for i, did in enumerate(doc_ids):
+                best_label = 'general'
+                best_score = -1.0
+                for c_name, c_emb in zip(categories, cat_embs):
+                    score = cosine_similarity(doc_embs[i], c_emb)
+                    if score > best_score:
+                        best_score = score
+                        best_label = c_name
+                docs_meta[did]['category'] = best_label
+    except Exception:
+        logger.exception("Failed to classify document categories via embeddings")
+
+    try:
+        doc_ids = list(docs_meta.keys())
+        summaries = [docs_meta[d]['summary'] for d in doc_ids]
+        if summaries:
+            doc_embeddings = await get_ollama_embeddings(summaries)
+            doc_points = []
+            for did, emb in zip(doc_ids, doc_embeddings):
+                meta = docs_meta[did]
+                payload = {
+                    'is_doc': True,
+                    'doc_id': did,
+                    'file_name': meta.get('file_name'),
+                    'download_url': meta.get('download_url'),
+                    'doc_summary': meta.get('summary'),
+                    'category': meta.get('category'),
+                }
+                doc_points.append(
+                    models.PointStruct(id=f"doc-{did}", vector={"text-dense": emb}, payload=payload)
+                )
+            if doc_points:
+                safe_upsert(collection_name, doc_points)
+    except Exception:
+        logger.exception("Failed to create document-level points")
+
+    # Now ingest chunk-level points in batches
+    for start in range(0, total_chunks, batch_size):
         batch_docs = documents[start : start + batch_size]
         batch_payloads = payloads[start : start + batch_size]
 
@@ -1093,11 +1176,13 @@ async def process_passports_upload(
                 indices=sparse_vector.indices.tolist(),
                 values=sparse_vector.values.tolist(),
             )
+            payload = batch_payloads[offset]
+            point_id = str(uuid.uuid4())
             batch_points.append(
                 models.PointStruct(
-                    id=str(uuid.uuid4()),
+                    id=point_id,
                     vector={"text-dense": dense_vector, "text-sparse": qdrant_sparse_vector},
-                    payload=batch_payloads[offset],
+                    payload=payload,
                 )
             )
 
@@ -1107,26 +1192,26 @@ async def process_passports_upload(
             indexed += len(chunk)
 
             if job_id and total_chunks:
-                percent = (indexed / total_chunks) * 100
+                percent = (indexed / total_chunks) * 100 if total_chunks else 100
                 passports_jobs[job_id].update(
                     {
-                        "status": "running",
-                        "progress": round(percent, 2),
-                        "indexed_chunks": indexed,
-                        "total_chunks": total_chunks,
+                        'status': 'running',
+                        'progress': round(percent, 2),
+                        'indexed_chunks': indexed,
+                        'total_chunks': total_chunks,
                     }
                 )
 
     duration = perf_counter() - total_start
     result = {
-        "status": "success",
-        "indexed_chunks": indexed,
-        "skipped_files": skipped,
-        "total_chunks": total_chunks,
-        "duration_sec": round(duration, 3),
+        'status': 'success',
+        'indexed_chunks': indexed,
+        'skipped_files': skipped,
+        'total_chunks': total_chunks,
+        'duration_sec': round(duration, 3),
     }
     if job_id:
-        passports_jobs[job_id].update({"status": "completed", "progress": 100, **result})
+        passports_jobs[job_id].update({'status': 'completed', 'progress': 100, **result})
     return result
 
 
@@ -1217,8 +1302,12 @@ async def passports_status(job_id: str):
 async def search_passports(
     query: str = Query(...),
     collection_name: str = Query(...),
-    limit: int = Query(5, ge=1, le=20),
+    limit: int = Query(5, ge=1, le=50),
     only_payload: bool = Query(False),
+    by_document: bool = Query(False, description="If true, perform doc->passage two-stage retrieval"),
+    category: Optional[str] = Query(None, description="Optional category filter to restrict search"),
+    doc_top_k: int = Query(5, ge=1, le=50, description="How many top documents to retrieve in stage 1"),
+    chunks_per_doc: int = Query(3, ge=1, le=10, description="How many chunks to fetch per top doc"),
 ):
     dense_vector = await get_ollama_embedding(query)
     sparse_vector_gen = list(sparse_embedding_model.embed([query]))[0]
@@ -1227,20 +1316,109 @@ async def search_passports(
         values=sparse_vector_gen.values.tolist(),
     )
 
-    points = qdrant_client.query_points(
+    # build optional category filter
+    query_filter = None
+    if category:
+        query_filter = models.Filter(must=[models.FieldCondition(key="category", match=models.MatchValue(value=category))])
+
+    if not by_document:
+        points = qdrant_client.query_points(
+            collection_name=collection_name,
+            prefetch=[
+                models.Prefetch(query=sparse_vector, using="text-sparse", limit=limit),
+                models.Prefetch(query=dense_vector, using="text-dense", limit=limit),
+            ],
+            query=models.FusionQuery(fusion=models.Fusion.RRF),
+            limit=limit,
+            with_payload=True,
+            with_vectors=True,
+            query_filter=query_filter,
+        ).points
+        if only_payload:
+            return {"results": [getattr(p, "payload", {}) for p in points]}
+        return {"results": points}
+
+    # by_document two-stage retrieval
+    # Stage 1: retrieve top documents (points where is_doc == True)
+    doc_filter_components = [models.FieldCondition(key="is_doc", match=models.MatchValue(value=True))]
+    if category:
+        doc_filter_components.append(models.FieldCondition(key="category", match=models.MatchValue(value=category)))
+    doc_filter = models.Filter(must=doc_filter_components)
+
+    dense_docs = qdrant_client.query_points(
         collection_name=collection_name,
-        prefetch=[
-            models.Prefetch(query=sparse_vector, using="text-sparse", limit=limit),
-            models.Prefetch(query=dense_vector, using="text-dense", limit=limit),
-        ],
-        query=models.FusionQuery(fusion=models.Fusion.RRF),
-        limit=limit,
+        query=dense_vector,
+        using="text-dense",
+        limit=doc_top_k,
         with_payload=True,
-        with_vectors=True,
+        query_filter=doc_filter,
     ).points
+    sparse_docs = qdrant_client.query_points(
+        collection_name=collection_name,
+        query=sparse_vector,
+        using="text-sparse",
+        limit=doc_top_k,
+        with_payload=True,
+        query_filter=doc_filter,
+    ).points
+
+    # fuse doc scores via RRF-like weighting
+    dense_rank = {p.id: i + 1 for i, p in enumerate(dense_docs)}
+    sparse_rank = {p.id: i + 1 for i, p in enumerate(sparse_docs)}
+    rank_constant = 60.0
+
+    def rrf(rank_value: Optional[int]) -> float:
+        if not rank_value:
+            return 0.0
+        return 1.0 / (rank_constant + float(rank_value))
+
+    doc_candidates = {p.id: p for p in dense_docs}
+    for p in sparse_docs:
+        if p.id not in doc_candidates:
+            doc_candidates[p.id] = p
+
+    weighted_scores = {}
+    for pid in doc_candidates:
+        weighted_scores[pid] = (rrf(dense_rank.get(pid)) * 0.8) + (rrf(sparse_rank.get(pid)) * 0.2)
+
+    ranked_doc_ids = sorted(weighted_scores.keys(), key=lambda k: weighted_scores[k], reverse=True)[:doc_top_k]
+    top_docs = [doc_candidates[did] for did in ranked_doc_ids]
+
+    # Stage 2: for each top doc, fetch top chunks restricted to doc_id
+    final_chunks = []
+    for doc_point in top_docs:
+        doc_payload = getattr(doc_point, 'payload', {}) or {}
+        did = doc_payload.get('doc_id') or (str(doc_point.id).replace('doc-', ''))
+        chunk_filter = models.Filter(must=[models.FieldCondition(key='doc_id', match=models.MatchValue(value=did))])
+        if category:
+            chunk_filter.must.append(models.FieldCondition(key='category', match=models.MatchValue(value=category)))
+
+        chunks = qdrant_client.query_points(
+            collection_name=collection_name,
+            query=dense_vector,
+            using='text-dense',
+            limit=chunks_per_doc,
+            with_payload=True,
+            with_vectors=True,
+            query_filter=chunk_filter,
+        ).points
+        # attach parent doc metadata
+        for c in chunks:
+            if not c.payload:
+                c.payload = {}
+            c.payload['_parent_doc'] = {
+                'doc_id': did,
+                'file_name': doc_payload.get('file_name'),
+                'doc_summary': doc_payload.get('doc_summary'),
+                'category': doc_payload.get('category'),
+            }
+            final_chunks.append(c)
+
+    # limit to requested number
+    results = final_chunks[:limit]
     if only_payload:
-        return {"results": [getattr(p, "payload", {}) for p in points]}
-    return {"results": points}
+        return {"results": [getattr(p, 'payload', {}) for p in results]}
+    return {"results": results}
 
 
 async def run_catalog_search(
