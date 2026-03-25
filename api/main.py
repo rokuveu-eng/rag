@@ -1068,6 +1068,23 @@ def build_passport_documents(file_entries: List[tuple], job_id: Optional[str] = 
 
         for chunk_index, chunk in enumerate(chunks, start=1):
             documents.append(chunk)
+            # compute chunk_context as surrounding window in the full document
+            full = docs_meta[doc_id].get('full_text', '')
+            window = 400
+            try:
+                idx = full.find(chunk)
+                if idx != -1:
+                    start_ctx = max(0, idx - window)
+                    end_ctx = min(len(full), idx + len(chunk) + window)
+                    chunk_context = full[start_ctx:end_ctx].strip()
+                else:
+                    # fallback to chunk plus neighbors
+                    start_ctx = max(0, chunk_index - 2)
+                    end_ctx = min(len(chunks), chunk_index + 1)
+                    chunk_context = ' '.join(chunks[start_ctx:end_ctx])
+            except Exception:
+                chunk_context = chunk
+
             p = {
                 'file_name': filename,
                 'source': src,
@@ -1077,6 +1094,8 @@ def build_passport_documents(file_entries: List[tuple], job_id: Optional[str] = 
                 'doc_id': doc_id,
                 'category': docs_meta[doc_id]['category'],
                 'is_doc': False,
+                'chunk_context': chunk_context,
+                'doc_full_text': (full or '')[:8000],
             }
             if download_url:
                 p['download_url'] = download_url
