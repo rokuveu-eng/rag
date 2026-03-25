@@ -965,25 +965,23 @@ def build_passport_documents(file_entries: List[tuple], job_id: Optional[str] = 
     documents = []
     payloads = []
     skipped = 0
-    for filename, contents in file_entries:
-        # support optional third element (download_url)
+    for entry in file_entries:
         download_url = None
-        if len(file_entries and file_entries[0]) and isinstance(file_entries[0], tuple):
-            # handle variable-length tuples per-entry
-            pass
-        try:
-            if isinstance(filename, tuple) and len(filename) >= 2:
-                # defensive: if caller passed tuple inside list by mistake
-                filename, contents = filename[0], filename[1]
-        except Exception:
-            pass
-        # if entry is a 3-tuple, unpack download_url
-        try:
-            if isinstance(file_entries[0], tuple) and len(file_entries[0]) >= 3:
-                # we'll check per-item below
-                pass
-        except Exception:
-            pass
+        # support entries as (filename, contents) or (filename, contents, download_url)
+        if isinstance(entry, tuple) or isinstance(entry, list):
+            if len(entry) >= 2:
+                filename = entry[0]
+                contents = entry[1]
+                if len(entry) >= 3:
+                    download_url = entry[2]
+            else:
+                logger.warning("Skipped invalid file entry (too few elements): %s", entry)
+                skipped += 1
+                continue
+        else:
+            logger.warning("Skipped invalid file entry (not tuple): %s", type(entry))
+            skipped += 1
+            continue
         lower = (filename or "").lower()
         text = ""
         src = "auto"
