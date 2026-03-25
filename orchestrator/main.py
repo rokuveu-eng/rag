@@ -18,8 +18,8 @@ from redis import asyncio as redis_async
 
 
 CATALOG_API_URL = os.getenv("CATALOG_API_URL", "http://api:8424").rstrip("/")
-DEFAULT_AI_BASE_URL = os.getenv("AI_BASE_URL", "https://polza.ai/api/v1").rstrip("/")
-DEFAULT_AI_MODEL = os.getenv("AI_MODEL", "openai/gpt-4o")
+DEFAULT_AI_BASE_URL = os.getenv("AI_BASE_URL", "http://ollama:11434").rstrip("/")
+DEFAULT_AI_MODEL = os.getenv("AI_MODEL", "qwen3.5:9b")
 SPEC_DIR = Path(os.getenv("SPEC_DIR", "/app/specs"))
 REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379/0")
 MEMORY_TTL_SEC = int(os.getenv("MEMORY_TTL_SEC", "86400"))

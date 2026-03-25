@@ -148,8 +148,8 @@ let cachedWorkbook = null;
 const aiSettingsKey = 'orchestrator_ai_settings_v1';
 
 const defaultAiSettings = {
-    ai_endpoint: 'https://polza.ai/api/v1',
-    ai_model: 'openai/gpt-4o',
+    ai_endpoint: 'http://ollama:11434',
+    ai_model: 'qwen3.5:9b',
     ai_api_key: '',
     orchestrator_url: 'http://localhost:8430',
     collection_name: 'CHINT',

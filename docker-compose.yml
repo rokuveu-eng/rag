@@ -41,8 +41,10 @@ services:
       - "8430:8430"
     environment:
       CATALOG_API_URL: ${CATALOG_API_URL:-http://api:8424}
-      AI_BASE_URL: ${AI_BASE_URL:-https://polza.ai/api/v1}
-      AI_MODEL: ${AI_MODEL:-openai/gpt-4o}
+      AI_BASE_URL: ${AI_BASE_URL:-http://ollama:11434}
+      AI_MODEL: ${AI_MODEL:-qwen3.5:9b}
+      # Use Ollama qwen3.5:9b by default for orchestrator parsing
+      # Set AI_BASE_URL=http://ollama:11434 and AI_MODEL=qwen3.5:9b in .env to override
       SPEC_DIR: /app/specs
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
       MEMORY_TTL_SEC: ${MEMORY_TTL_SEC:-86400}
@@ -53,23 +55,6 @@ services:
       - redis
     volumes:
       - orchestrator_specs:/app/specs
-
-  bitrix-adapter:
-    build:
-      context: ./bitrix_adapter
-    restart: unless-stopped
-    ports:
-      - "8440:8440"
-    environment:
-      ORCHESTRATOR_URL: ${ORCHESTRATOR_URL:-http://orchestrator:8430}
-      DEFAULT_COLLECTION_NAME: ${DEFAULT_COLLECTION_NAME:-CHINT}
-      DEFAULT_TENANT_ID: ${DEFAULT_TENANT_ID:-default}
-      BITRIX_WEBHOOK_URL: ${BITRIX_WEBHOOK_URL:-}
-      BITRIX_BOT_ID: ${BITRIX_BOT_ID:-}
-      BITRIX_CLIENT_ID: ${BITRIX_CLIENT_ID:-}
-      BITRIX_WEBHOOK_VERIFY_TOKEN: ${BITRIX_WEBHOOK_VERIFY_TOKEN:-}
-    depends_on:
-      - orchestrator
 
 volumes:
   qdrant_storage:

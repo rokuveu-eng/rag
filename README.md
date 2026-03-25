@@ -92,9 +92,9 @@ curl -s "http://localhost:8424/search?query=автомат%2016а&collection_nam
 {
   "message": "Автомат 16А 4 шт; Контактор 25А 2 шт; Кабель 3х2.5 100 м",
   "collection_name": "my_collection",
-  "ai_base_url": "https://polza.ai/api/v1",
-  "ai_api_key": "<POLZA_AI_API_KEY>",
-  "ai_model": "openai/gpt-4o",
+  "ai_base_url": "http://ollama:11434",
+  "ai_api_key": "<OLLAMA_API_KEY_OR_EMPTY>",
+  "ai_model": "qwen3.5:9b",
   "probable_limit": 3
 }
 ```
