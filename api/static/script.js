@@ -149,6 +149,13 @@ const kbCollectionInput = document.getElementById('kb-collection-name');
 const kbBatchSizeInput = document.getElementById('kb-batch-size');
 const kbPointsBatchSizeInput = document.getElementById('kb-points-batch-size');
 const kbUseOcrInput = document.getElementById('kb-use-ocr');
+const kbImportButton = document.getElementById('kb-import-button');
+const kbWebhookInput = document.getElementById('kb-webhook-url');
+const kbFolderIdInput = document.getElementById('kb-folder-id');
+const kbFileTypesInput = document.getElementById('kb-file-types');
+const kbDeleteCollectionButton = document.getElementById('kb-delete-collection');
+const kbProgressFill = document.getElementById('kb-progress-fill');
+const kbJobIdDisplay = document.getElementById('kb-job-id');
 
 let mainSearchController = null;
 let aiRequestController = null;
@@ -407,6 +414,99 @@ if (processButton) {
         };
 
         reader.readAsArrayBuffer(xlsxFileInput.files[0]);
+    });
+}
+
+// KB: upload local files
+if (kbUploadButton) {
+    kbUploadButton.addEventListener('click', async () => {
+        if (!kbFilesInput?.files?.length) return alert('Выберите файлы для загрузки');
+        const collection = kbCollectionInput?.value?.trim() || 'kb_collection';
+        const batchSize = parseInt(kbBatchSizeInput?.value || '8', 10) || 8;
+        const pointsBatch = parseInt(kbPointsBatchSizeInput?.value || '200', 10) || 200;
+
+        const fd = new FormData();
+        for (const f of kbFilesInput.files) fd.append('files', f, f.name);
+        fd.append('collection_name', collection);
+        fd.append('batch_size', String(batchSize));
+        fd.append('points_batch_size', String(pointsBatch));
+
+        try {
+            setStatus(kbStatusText, 'запуск загрузки...');
+            const resp = await fetchJson('/upload_passports_async', { method: 'POST', body: fd }, 120000);
+            kbJobIdDisplay.textContent = `Job: ${resp.job_id}`;
+            addLog(kbLogOutput, `Started upload job ${resp.job_id}`);
+            await pollJob(`/passports_status/${resp.job_id}`, (s) => {
+                setStatus(kbStatusText, s.status || 'running');
+                setProgress(kbProgressFill, s.progress || 0);
+            });
+            addLog(kbLogOutput, `Upload completed: ${resp.job_id}`);
+            setStatus(kbStatusText, 'готово');
+        } catch (e) {
+            setStatus(kbStatusText, 'ошибка');
+            addLog(kbLogOutput, `Ошибка: ${e.message}`);
+            alert(e.message);
+        }
+    });
+}
+
+// KB: import from Bitrix
+if (kbImportButton) {
+    kbImportButton.addEventListener('click', async () => {
+        const collection = kbCollectionInput?.value?.trim() || 'kb_collection';
+        const batchSize = parseInt(kbBatchSizeInput?.value || '8', 10) || 8;
+        const pointsBatch = parseInt(kbPointsBatchSizeInput?.value || '200', 10) || 200;
+        const webhook = kbWebhookInput?.value?.trim() || '';
+        const folderId = kbFolderIdInput?.value?.trim();
+        const fileTypes = kbFileTypesInput?.value?.trim() || '';
+
+        if (!folderId) return alert('Укажите folder_id в Bitrix');
+
+        const fd = new FormData();
+        if (webhook) fd.append('webhook_url', webhook);
+        fd.append('folder_id', folderId);
+        fd.append('collection_name', collection);
+        if (fileTypes) fd.append('file_types', fileTypes);
+        fd.append('batch_size', String(batchSize));
+        fd.append('points_batch_size', String(pointsBatch));
+
+        try {
+            setStatus(kbStatusText, 'запуск импорта...');
+            const resp = await fetchJson('/import_bitrix_folder', { method: 'POST', body: fd }, 300000);
+            kbJobIdDisplay.textContent = `Job: ${resp.job_id}`;
+            addLog(kbLogOutput, `Started Bitrix import ${resp.job_id}`);
+            await pollJob(`/passports_status/${resp.job_id}`, (s) => {
+                setStatus(kbStatusText, s.status || 'running');
+                setProgress(kbProgressFill, s.progress || 0);
+            });
+            addLog(kbLogOutput, `Import completed: ${resp.job_id}`);
+            setStatus(kbStatusText, 'готово');
+        } catch (e) {
+            setStatus(kbStatusText, 'ошибка');
+            addLog(kbLogOutput, `Ошибка: ${e.message}`);
+            alert(e.message);
+        }
+    });
+}
+
+// KB: delete collection
+if (kbDeleteCollectionButton) {
+    kbDeleteCollectionButton.addEventListener('click', async () => {
+        const collection = kbCollectionInput?.value?.trim();
+        if (!collection) return alert('Укажите имя коллекции');
+        if (!confirm(`Удалить коллекцию ${collection}? Это удалит все данные.`)) return;
+        try {
+            setStatus(kbStatusText, 'удаление...');
+            await fetchJson(`/collection?collection_name=${encodeURIComponent(collection)}`, { method: 'DELETE' });
+            addLog(kbLogOutput, `Коллекция ${collection} удалена`);
+            setStatus(kbStatusText, 'удалено');
+            kbJobIdDisplay.textContent = 'Job: -';
+            setProgress(kbProgressFill, 0);
+        } catch (e) {
+            setStatus(kbStatusText, 'ошибка');
+            addLog(kbLogOutput, `Ошибка удаления: ${e.message}`);
+            alert(e.message);
+        }
     });
 }
 

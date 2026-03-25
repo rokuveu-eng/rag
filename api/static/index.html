@@ -134,6 +134,18 @@
                 <input type="text" id="kb-collection-name" value="kb_collection">
             </div>
             <div>
+                <label for="kb-webhook-url">Bitrix Webhook URL (optional)</label>
+                <input type="text" id="kb-webhook-url" placeholder="https://your.bitrix24.ru/rest/1/XXXXX">
+            </div>
+            <div>
+                <label for="kb-folder-id">Folder ID (Bitrix)</label>
+                <input type="text" id="kb-folder-id" placeholder="ID папки в Bitrix">
+            </div>
+            <div>
+                <label for="kb-file-types">Фильтр расширений</label>
+                <input type="text" id="kb-file-types" placeholder=".pdf,.docx,.txt (оставьте пустым для всех)">
+            </div>
+            <div>
                 <label for="kb-batch-size">Batch size</label>
                 <input type="number" id="kb-batch-size" value="8" min="1" max="128">
             </div>
@@ -155,8 +167,14 @@
         </div>
 
         <div class="section">
-            <button id="kb-upload-button">Загрузить в базу знаний</button>
+            <div style="display:flex;gap:12px;flex-wrap:wrap;">
+                <button id="kb-upload-button">Загрузить локальные файлы</button>
+                <button id="kb-import-button">Импорт из Bitrix</button>
+                <button id="kb-delete-collection" style="background:#ef4444;">Удалить коллекцию</button>
+            </div>
             <div class="status" id="kb-status-text">Статус: ожидание файлов.</div>
+            <div class="progress-bar"><div class="progress-fill" id="kb-progress-fill"></div></div>
+            <div class="status" id="kb-job-id">Job: -</div>
             <div class="log-output" id="kb-log-output">Логи загрузки появятся здесь.</div>
         </div>
     </div>
