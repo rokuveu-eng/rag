@@ -21,6 +21,9 @@ import uuid
 from pdf2image import convert_from_bytes
 import pytesseract
 import math
+import subprocess
+import tempfile
+from io import BytesIO
 
 
 logging.basicConfig(level=logging.INFO)
@@ -695,6 +698,69 @@ def ocr_pdf_bytes(contents: bytes) -> str:
     return ""
 
 
+def extract_docx_text(contents: bytes) -> str:
+    try:
+        from docx import Document
+        from PIL import Image
+
+        doc = Document(BytesIO(contents))
+        parts = []
+        for p in doc.paragraphs:
+            t = p.text.strip()
+            if t:
+                parts.append(t)
+
+        # attempt to extract images and OCR them
+        ocr_texts = []
+        try:
+            for rel in doc.part.rels.values():
+                try:
+                    if getattr(rel, "target_part", None) and getattr(rel.target_part, "content_type", "").startswith("image"):
+                        blob = rel.target_part.blob
+                        try:
+                            img = Image.open(BytesIO(blob))
+                            txt = pytesseract.image_to_string(img, lang="rus+eng") or ""
+                            if txt.strip():
+                                ocr_texts.append(txt.strip())
+                        except Exception:
+                            logger.debug("Failed OCR image in docx", exc_info=True)
+                except Exception:
+                    continue
+        except Exception:
+            logger.debug("No images extracted from docx or error iterating rels", exc_info=True)
+
+        if ocr_texts:
+            parts.append("\n".join(ocr_texts))
+
+        return "\n".join(parts).strip()
+    except Exception:
+        logger.debug("extract_docx_text failed", exc_info=True)
+        return ""
+
+
+def extract_doc_text(contents: bytes) -> str:
+    # try antiword for legacy .doc
+    try:
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.doc') as tf:
+            tf.write(contents)
+            tf.flush()
+            tmp_path = tf.name
+        try:
+            res = subprocess.run(["antiword", tmp_path], capture_output=True, text=True, timeout=30)
+            if res.returncode == 0:
+                return res.stdout.strip()
+        except FileNotFoundError:
+            logger.debug("antiword not installed")
+        except Exception:
+            logger.debug("antiword failed", exc_info=True)
+    finally:
+        try:
+            os.unlink(tmp_path)
+        except Exception:
+            pass
+    return ""
+
+
 def chunk_text(text: str, *, max_chars: int = 2000, overlap: int = 200) -> List[str]:
     if not text:
         return []
@@ -720,8 +786,35 @@ def build_passport_documents(file_entries: List[tuple]):
     payloads = []
     skipped = 0
     for filename, contents in file_entries:
-        text = ocr_pdf_bytes(contents)
+        lower = (filename or "").lower()
+        text = ""
+        src = "auto"
+        if lower.endswith('.pdf'):
+            text = ocr_pdf_bytes(contents)
+            src = 'pdf'
+        elif lower.endswith('.docx'):
+            text = extract_docx_text(contents)
+            src = 'docx'
+        elif lower.endswith('.doc'):
+            text = extract_doc_text(contents)
+            src = 'doc'
+        elif lower.endswith('.txt'):
+            try:
+                text = contents.decode('utf-8', errors='ignore')
+                src = 'txt'
+            except Exception:
+                text = ''
+        else:
+            # try pdf/image fallbacks
+            text = ocr_pdf_bytes(contents)
+            src = 'auto'
         if not text:
+            # log snippet for diagnostics
+            try:
+                head = contents[:512]
+                logger.warning("Skipped file %s — no text extracted; head=%s", filename, head[:128])
+            except Exception:
+                logger.warning("Skipped file %s — no text extracted", filename)
             skipped += 1
             continue
         chunks = chunk_text(text)
@@ -732,10 +825,8 @@ def build_passport_documents(file_entries: List[tuple]):
             documents.append(chunk)
             payloads.append(
                 {
-                    "pdf_name": filename,
-                    "page_range": "1-2",
-                    "source": "ocr",
-                    "article": None,
+                    "file_name": filename,
+                    "source": src,
                     "text": chunk,
                     "chunk_id": chunk_index,
                     "chunks_total": len(chunks),
