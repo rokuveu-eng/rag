@@ -21,7 +21,7 @@ docker compose up -d --build
 - API + UI: http://localhost:8424
 - AI Orchestrator: http://localhost:8430
 - Redis (память): http://localhost:6379
-- Bitrix Adapter: http://localhost:8440
+ - Redis (память): http://localhost:6379
 
 ### GPU для Ollama
 
@@ -51,12 +51,6 @@ docker compose up -d --build
 - `POST /agent/spec`
 - `POST /memory/reset`
 - `GET /agent/files/{file_id}`
-- `GET /health`
-
-### Эндпоинты Bitrix Adapter
-
-- `POST /bitrix/webhook`
-- `POST /bitrix/send-test`
 - `GET /health`
 
 Параметры `GET /search`:
@@ -146,19 +140,4 @@ curl -s -X POST "http://localhost:8430/memory/reset" \
 - вкладка **Паспорта**;
 - вкладка **AI чат** (настройки endpoint/API key/model + тестовый чат);
 - вкладка **Удаление**.
-
-## Bitrix24 интеграция и память
-
-В `docker-compose.yml` добавлены сервисы:
-- `redis` — хранение краткой LLM-памяти;
-- `bitrix-adapter` — webhook-адаптер Bitrix24.
-
-Ключевые переменные окружения Bitrix Adapter:
-- `BITRIX_WEBHOOK_URL` — базовый webhook URL Bitrix24 (без `/imbot.message.add` в конце),
-- `BITRIX_BOT_ID` — ID чат-бота (опционально),
-- `BITRIX_CLIENT_ID` — CLIENT_ID для webhook-вызовов (если требуется),
-- `BITRIX_WEBHOOK_VERIFY_TOKEN` — токен верификации входящего webhook.
-
-Поведение команды `/reset`:
-- если в входящем сообщении из Bitrix24 текст `/reset`, адаптер вызывает `POST /memory/reset` в orchestrator;
-- после успешного сброса отправляет подтверждение в диалог Bitrix24.
+ - вкладка **Удаление**.
