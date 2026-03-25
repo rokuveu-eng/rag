@@ -122,8 +122,43 @@
         <button class="tab-button active" data-tab="index">Основная загрузка</button>
         <button class="tab-button" data-tab="stock">Остатки (расшир.)</button>
         <button class="tab-button" data-tab="passports">Паспорта (расшир.)</button>
+        <button class="tab-button" data-tab="kb">База знаний</button>
         <button class="tab-button" data-tab="ai">AI чат</button>
         <button class="tab-button" data-tab="delete">Удаление</button>
+    </div>
+
+    <div class="tab-content" id="tab-kb">
+        <div class="grid">
+            <div>
+                <label for="kb-collection-name">Имя коллекции</label>
+                <input type="text" id="kb-collection-name" value="kb_collection">
+            </div>
+            <div>
+                <label for="kb-batch-size">Batch size</label>
+                <input type="number" id="kb-batch-size" value="8" min="1" max="128">
+            </div>
+            <div>
+                <label for="kb-points-batch-size">Points batch size</label>
+                <input type="number" id="kb-points-batch-size" value="200" min="1" max="5000">
+            </div>
+            <div>
+                <label for="kb-use-ocr">Использовать OCR для PDF</label>
+                <select id="kb-use-ocr">
+                    <option value="true" selected>Да</option>
+                    <option value="false">Нет</option>
+                </select>
+            </div>
+            <div>
+                <label for="kb-files">Файлы (PDF, DOCX, TXT)</label>
+                <input type="file" id="kb-files" accept=".pdf,.docx,.doc,.txt" multiple>
+            </div>
+        </div>
+
+        <div class="section">
+            <button id="kb-upload-button">Загрузить в базу знаний</button>
+            <div class="status" id="kb-status-text">Статус: ожидание файлов.</div>
+            <div class="log-output" id="kb-log-output">Логи загрузки появятся здесь.</div>
+        </div>
     </div>
 
     <div class="tab-content active" id="tab-index">

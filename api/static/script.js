@@ -140,6 +140,16 @@ const mainSearchLimitInput = document.getElementById('main-search-limit');
 const mainSearchCandidateLimitInput = document.getElementById('main-search-candidate-limit');
 const deleteCollectionNameInput = document.getElementById('delete-collection-name');
 
+// Knowledge Base UI elements
+const kbUploadButton = document.getElementById('kb-upload-button');
+const kbStatusText = document.getElementById('kb-status-text');
+const kbLogOutput = document.getElementById('kb-log-output');
+const kbFilesInput = document.getElementById('kb-files');
+const kbCollectionInput = document.getElementById('kb-collection-name');
+const kbBatchSizeInput = document.getElementById('kb-batch-size');
+const kbPointsBatchSizeInput = document.getElementById('kb-points-batch-size');
+const kbUseOcrInput = document.getElementById('kb-use-ocr');
+
 let mainSearchController = null;
 let aiRequestController = null;
 
@@ -536,6 +546,35 @@ if (passportsUploadButton) {
         } catch (e) {
             setStatus(passportsStatusText, 'ошибка');
             addLog(passportsLogOutput, `Ошибка: ${e.message}`);
+            alert(e.message);
+        }
+    });
+}
+
+if (kbUploadButton) {
+    kbUploadButton.addEventListener('click', async () => {
+        const files = kbFilesInput?.files;
+        if (!files || !files.length) return alert('Выберите файлы для загрузки');
+
+        const formData = new FormData();
+        Array.from(files).forEach((f) => formData.append('files', f));
+        formData.append('collection_name', kbCollectionInput?.value || 'kb_collection');
+        formData.append('batch_size', kbBatchSizeInput?.value || '8');
+        formData.append('points_batch_size', kbPointsBatchSizeInput?.value || '200');
+        formData.append('use_ocr', kbUseOcrInput?.value || 'true');
+
+        try {
+            const { job_id } = await fetchJson('/upload_passports_async', { method: 'POST', body: formData });
+            addLog(kbLogOutput, `Задача: ${job_id}`);
+
+            await pollJob(`/passports_status/${job_id}`, (s) => {
+                setStatus(kbStatusText, `в процессе... ${s.progress || 0}%`);
+            });
+
+            setStatus(kbStatusText, 'успех');
+        } catch (e) {
+            setStatus(kbStatusText, 'ошибка');
+            addLog(kbLogOutput, `Ошибка: ${e.message}`);
             alert(e.message);
         }
     });
