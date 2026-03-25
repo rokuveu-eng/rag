@@ -1443,8 +1443,58 @@ async def search_passports(
         values=sparse_vector_gen.values.tolist(),
     )
 
-    # build optional category filter
+    # If category not provided, try to classify the query via LLM and use that category
     query_filter = None
+    classified_category = None
+    if not category:
+        try:
+            # gather existing categories from doc-level points
+            existing_categories = set()
+            try:
+                sc = qdrant_client.scroll(collection_name=collection_name, with_payload=True, with_vectors=False, limit=2000)[0]
+                for p in sc:
+                    payload = getattr(p, 'payload', {}) or {}
+                    if payload.get('is_doc') and payload.get('category'):
+                        existing_categories.add(str(payload.get('category')).lower())
+            except Exception:
+                logger.debug('Failed to read categories from Qdrant for classification', exc_info=True)
+
+            cat_list = ', '.join(sorted(existing_categories)) if existing_categories else 'none'
+            prompt = (
+                "К какому типу/категории относится этот запрос? Верни JSON {\"category\": \"label\"}."
+                " Если категория похожа на одну из существующих, используй её. Если похожей нет, предложи новую короткую категорию."
+                f"\nСуществующие категории: {cat_list}.\nЗапрос: {query}"
+            )
+            out = await call_ollama_generate(prompt, timeout=20)
+            if out:
+                try:
+                    m = re.search(r"\{[\s\S]*\}", out)
+                    if m:
+                        parsed = json.loads(m.group(0))
+                        classified_category = parsed.get('category')
+                except Exception:
+                    # fallback: take first token/word from LLM output
+                    lines = [ln.strip() for ln in out.splitlines() if ln.strip()]
+                    if lines:
+                        classified_category = lines[0].split()[0]
+            if classified_category:
+                classified_category = str(classified_category).lower()
+                # if it's new, create a placeholder document-level point so category exists
+                if classified_category not in existing_categories:
+                    try:
+                        emb = await get_ollama_embedding(classified_category)
+                        cat_point = models.PointStruct(
+                            id=f"cat-{uuid.uuid4().hex}",
+                            vector={"text-dense": emb},
+                            payload={"is_doc": True, "category": classified_category, "doc_summary": "(auto-created category)"},
+                        )
+                        safe_upsert(collection_name, [cat_point])
+                    except Exception:
+                        logger.exception('Failed to create placeholder category point')
+                category = classified_category
+        except Exception:
+            logger.exception('Query classification failed')
+
     if category:
         query_filter = models.Filter(must=[models.FieldCondition(key="category", match=models.MatchValue(value=category))])
 
@@ -1462,8 +1512,8 @@ async def search_passports(
             query_filter=query_filter,
         ).points
         if only_payload:
-            return {"results": [getattr(p, "payload", {}) for p in points]}
-        return {"results": points}
+            return {"results": [getattr(p, "payload", {}) for p in points], "classified_category": classified_category}
+        return {"results": points, "classified_category": classified_category}
 
     # by_document two-stage retrieval
     # Stage 1: retrieve top documents (points where is_doc == True)
@@ -1544,8 +1594,8 @@ async def search_passports(
     # limit to requested number
     results = final_chunks[:limit]
     if only_payload:
-        return {"results": [getattr(p, 'payload', {}) for p in results]}
-    return {"results": results}
+        return {"results": [getattr(p, 'payload', {}) for p in results], "classified_category": classified_category}
+    return {"results": results, "classified_category": classified_category}
 
 
 async def run_catalog_search(
