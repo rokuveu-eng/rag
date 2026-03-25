@@ -51,6 +51,9 @@ qdrant_client = QdrantClient(
     port=int(os.getenv("QDRANT_PORT", "6333")),
 )
 
+# Optional default Bitrix webhook URL (incoming webhook)
+BITRIX_WEBHOOK_URL = os.getenv("BITRIX_WEBHOOK_URL", "").strip()
+
 upload_jobs: Dict[str, Dict[str, Any]] = {}
 stock_jobs: Dict[str, Dict[str, Any]] = {}
 passports_jobs: Dict[str, Dict[str, Any]] = {}
@@ -801,6 +804,143 @@ def extract_doc_text(contents: bytes) -> str:
     return ""
 
 
+async def bitrix_call(base_webhook: str, method: str, params: dict):
+    """Call Bitrix incoming webhook REST method.
+    `base_webhook` should be the incoming webhook base URL without trailing slash,
+    e.g. https://your.bitrix24.ru/rest/1/XXXXX
+    We POST to {base_webhook}/{method} with params as form data.
+    """
+    url = base_webhook.rstrip("/") + "/" + method
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        try:
+            resp = await client.post(url, data=params)
+            resp.raise_for_status()
+            return resp.json()
+        except Exception:
+            logger.exception("Bitrix API call failed: %s %s", url, params)
+            return None
+
+
+async def list_bitrix_folder_recursive(base_webhook: str, folder_id: str, file_types: Optional[List[str]] = None):
+    """Return list of file descriptors: dicts with keys `name`, `id`, `download_url` (may be None).
+    Recurses into subfolders.
+    """
+    results = []
+
+    async def walk(fid: str):
+        resp = await bitrix_call(base_webhook, "disk.folder.getchildren", {"id": fid})
+        if not resp or "result" not in resp:
+            return
+        items = resp.get("result", [])
+        for it in items:
+            try:
+                it_type = it.get("TYPE") or it.get("type") or it.get("TYPE_ID")
+                if str(it_type).lower() == "folder" or it.get("TYPE") == "folder":
+                    sub_id = it.get("ID") or it.get("id")
+                    if sub_id:
+                        await walk(sub_id)
+                    continue
+                # treat as file
+                file_id = it.get("ID") or it.get("id") or it.get("FILE_ID")
+                name = it.get("NAME") or it.get("name") or it.get("TITLE") or it.get("ORIGINAL_NAME")
+                if not file_id:
+                    continue
+                # fetch file info to get download URL
+                finfo = await bitrix_call(base_webhook, "disk.file.get", {"id": file_id})
+                download_url = None
+                if finfo and "result" in finfo:
+                    f = finfo.get("result")
+                    # common field
+                    download_url = f.get("DOWNLOAD_URL") or f.get("downloadUrl")
+                    # some responses nest file data
+                    if not download_url and isinstance(f, dict):
+                        for k in ("file", "FILE", "fileInfo"):
+                            if k in f and isinstance(f[k], dict):
+                                download_url = f[k].get("DOWNLOAD_URL") or f[k].get("downloadUrl")
+                                if download_url:
+                                    break
+                # filter by extension if requested
+                if file_types:
+                    lower = (name or "").lower()
+                    ok = any(lower.endswith(ext) for ext in file_types)
+                    if not ok:
+                        continue
+
+                results.append({"name": name or f"file_{file_id}", "id": file_id, "download_url": download_url})
+            except Exception:
+                logger.exception("Error processing item from bitrix folder listing: %s", it)
+
+    await walk(folder_id)
+    return results
+
+
+async def download_from_url(url: str) -> Optional[bytes]:
+    if not url:
+        return None
+    try:
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            r = await client.get(url)
+            r.raise_for_status()
+            return r.content
+    except Exception:
+        logger.exception("Failed to download file from %s", url)
+        return None
+
+
+async def process_bitrix_import(*, base_webhook: str, folder_id: str, collection_name: str, file_types: Optional[List[str]], batch_size: int, points_batch_size: int, job_id: str):
+    # recreate collection (delete + create)
+    try:
+        qdrant_client.recreate_collection(
+            collection_name=collection_name,
+            vectors_config={"text-dense": models.VectorParams(size=1024, distance=models.Distance.COSINE)},
+            sparse_vectors_config={"text-sparse": models.SparseVectorParams(index=models.SparseIndexParams(on_disk=False))},
+        )
+    except Exception:
+        logger.exception("Failed to recreate collection %s", collection_name)
+
+    if job_id:
+        passports_jobs[job_id].update({"status": "running", "progress": 0})
+
+    files = await list_bitrix_folder_recursive(base_webhook, folder_id, file_types)
+    file_entries = []
+    total = len(files)
+    counted = 0
+    for f in files:
+        name = f.get("name")
+        download_url = f.get("download_url")
+        contents = None
+        if download_url:
+            contents = await download_from_url(download_url)
+        else:
+            # try disk.file.getContent fallback
+            finfo = await bitrix_call(base_webhook, "disk.file.getContent", {"id": f.get("id")})
+            # disk.file.getContent may return redirect URL or raw content; skip if not usable
+            contents = None
+
+        if not contents:
+            logger.warning("Skipped Bitrix file %s (no content downloaded)", name)
+            continue
+        file_entries.append((name, contents, download_url))
+        counted += 1
+        if job_id:
+            passports_jobs[job_id].update({"indexed_chunks": counted, "total_chunks": total, "progress": round((counted / total) * 100 if total else 0, 2)})
+
+    # hand off to existing passports processing (it will attach download_url from tuples)
+    if file_entries:
+        await process_passports_upload(file_entries=file_entries, collection_name=collection_name, batch_size=batch_size, points_batch_size=points_batch_size, job_id=job_id)
+    else:
+        raise HTTPException(status_code=400, detail="No files found or downloaded from Bitrix folder")
+
+
+async def run_bitrix_import_job(**kwargs):
+    job_id = kwargs.get("job_id")
+    try:
+        await process_bitrix_import(**kwargs)
+    except Exception as exc:
+        logger.error("Bitrix import job failed: %s", exc, exc_info=True)
+        passports_jobs[job_id].update({"status": "failed", "error": str(exc)})
+
+
 def chunk_text(text: str, *, max_chars: int = 2000, overlap: int = 200) -> List[str]:
     if not text:
         return []
@@ -826,6 +966,24 @@ def build_passport_documents(file_entries: List[tuple], job_id: Optional[str] = 
     payloads = []
     skipped = 0
     for filename, contents in file_entries:
+        # support optional third element (download_url)
+        download_url = None
+        if len(file_entries and file_entries[0]) and isinstance(file_entries[0], tuple):
+            # handle variable-length tuples per-entry
+            pass
+        try:
+            if isinstance(filename, tuple) and len(filename) >= 2:
+                # defensive: if caller passed tuple inside list by mistake
+                filename, contents = filename[0], filename[1]
+        except Exception:
+            pass
+        # if entry is a 3-tuple, unpack download_url
+        try:
+            if isinstance(file_entries[0], tuple) and len(file_entries[0]) >= 3:
+                # we'll check per-item below
+                pass
+        except Exception:
+            pass
         lower = (filename or "").lower()
         text = ""
         src = "auto"
@@ -875,15 +1033,26 @@ def build_passport_documents(file_entries: List[tuple], job_id: Optional[str] = 
             continue
         for chunk_index, chunk in enumerate(chunks, start=1):
             documents.append(chunk)
-            payloads.append(
-                {
-                    "file_name": filename,
-                    "source": src,
-                    "text": chunk,
-                    "chunk_id": chunk_index,
-                    "chunks_total": len(chunks),
-                }
-            )
+            p = {
+                "file_name": filename,
+                "source": src,
+                "text": chunk,
+                "chunk_id": chunk_index,
+                "chunks_total": len(chunks),
+            }
+            # if this file entry included a download_url, attach it
+            try:
+                # support entries that are (filename, contents, download_url)
+                # locate corresponding original tuple in file_entries
+                # if file_entries elements are tuples of length>=3, use their 3rd element
+                # iterate to find matching filename and contents
+                for ent in file_entries:
+                    if isinstance(ent, tuple) and len(ent) >= 3 and ent[0] == filename:
+                        p["download_url"] = ent[2]
+                        break
+            except Exception:
+                pass
+            payloads.append(p)
     return documents, payloads, skipped
 
 
@@ -994,6 +1163,44 @@ async def upload_passports_async(
             job_id=job_id,
             file_entries=file_entries,
             collection_name=collection_name,
+            batch_size=batch_size,
+            points_batch_size=points_batch_size,
+        )
+    )
+    return {"status": "started", "job_id": job_id}
+
+
+@app.post("/import_bitrix_folder")
+async def import_bitrix_folder(
+    webhook_url: Optional[str] = Form(None),
+    folder_id: str = Form(...),
+    collection_name: str = Form(...),
+    file_types: Optional[str] = Form(None, description="Comma-separated list of extensions, e.g. .pdf,.docx"),
+    batch_size: int = Form(8),
+    points_batch_size: int = Form(200),
+):
+    """Import files recursively from a Bitrix24 folder (uses incoming webhook REST URL).
+
+    Provide either `webhook_url` or set `BITRIX_WEBHOOK_URL` in env.
+    The endpoint will recreate the `collection_name` and reindex files.
+    """
+    base = (webhook_url or BITRIX_WEBHOOK_URL or "").strip()
+    if not base:
+        raise HTTPException(status_code=400, detail="No Bitrix webhook URL provided; set BITRIX_WEBHOOK_URL or pass webhook_url")
+
+    types = None
+    if file_types:
+        types = [t.strip().lower() for t in file_types.split(",") if t.strip()]
+
+    job_id = str(uuid.uuid4())
+    passports_jobs[job_id] = {"status": "queued", "progress": 0}
+    asyncio.create_task(
+        run_bitrix_import_job(
+            job_id=job_id,
+            base_webhook=base,
+            folder_id=folder_id,
+            collection_name=collection_name,
+            file_types=types,
             batch_size=batch_size,
             points_batch_size=points_batch_size,
         )
