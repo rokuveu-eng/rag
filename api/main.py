@@ -1013,6 +1013,7 @@ async def search_passports(
     query: str = Query(...),
     collection_name: str = Query(...),
     limit: int = Query(5, ge=1, le=20),
+    only_payload: bool = Query(False),
 ):
     dense_vector = await get_ollama_embedding(query)
     sparse_vector_gen = list(sparse_embedding_model.embed([query]))[0]
@@ -1032,6 +1033,8 @@ async def search_passports(
         with_payload=True,
         with_vectors=True,
     ).points
+    if only_payload:
+        return {"results": [getattr(p, "payload", {}) for p in points]}
     return {"results": points}
 
 
