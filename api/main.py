@@ -587,13 +587,112 @@ async def stock_status(job_id: str):
 
 
 def ocr_pdf_bytes(contents: bytes) -> str:
-    pages = convert_from_bytes(contents)
-    extracted = []
-    for page in pages:
-        text = pytesseract.image_to_string(page, lang="rus+eng")
-        if text:
-            extracted.append(text.strip())
-    return "\n".join(extracted).strip()
+    """
+    Try multiple strategies to extract text from uploaded bytes.
+    Strategies (in order):
+    - If bytes look like an image, run OCR on the image via Pillow+pytesseract.
+    - Try pdf2image + pytesseract.
+    - Try repairing PDF with pikepdf and then pdf2image.
+    - Try PyMuPDF (fitz) to extract text or rasterize pages and OCR.
+    Returns combined text or empty string on failure.
+    """
+    def is_pdf(b: bytes) -> bool:
+        try:
+            # quick header check
+            return b[:4] == b"%PDF"
+        except Exception:
+            return False
+
+    # helper to OCR a PIL image
+    def ocr_image(img) -> str:
+        try:
+            return pytesseract.image_to_string(img, lang="rus+eng") or ""
+        except Exception:
+            return ""
+
+    # If not PDF, try to open as image
+    if not is_pdf(contents):
+        try:
+            from PIL import Image
+            from io import BytesIO
+
+            img = Image.open(BytesIO(contents))
+            return ocr_image(img).strip()
+        except Exception:
+            logger.debug("Not an image or failed to OCR non-PDF input", exc_info=True)
+
+    # Try pdf2image -> pytesseract
+    try:
+        pages = convert_from_bytes(contents)
+        extracted = []
+        for page in pages:
+            text = ocr_image(page)
+            if text:
+                extracted.append(text.strip())
+        result = "\n".join(extracted).strip()
+        if result:
+            return result
+    except Exception:
+        logger.debug("pdf2image -> pytesseract failed", exc_info=True)
+
+    # Try repairing PDF with pikepdf
+    try:
+        import pikepdf
+        from io import BytesIO
+
+        repaired = BytesIO()
+        try:
+            with pikepdf.open(BytesIO(contents)) as pdf:
+                pdf.save(repaired)
+            repaired_bytes = repaired.getvalue()
+            pages = convert_from_bytes(repaired_bytes)
+            extracted = []
+            for page in pages:
+                text = ocr_image(page)
+                if text:
+                    extracted.append(text.strip())
+            result = "\n".join(extracted).strip()
+            if result:
+                return result
+        except Exception:
+            logger.debug("pikepdf repair attempt failed", exc_info=True)
+    except Exception:
+        logger.debug("pikepdf not available or failed", exc_info=True)
+
+    # Try PyMuPDF as a last resort
+    try:
+        import fitz
+        from PIL import Image
+        from io import BytesIO
+
+        doc = fitz.open(stream=contents, filetype="pdf")
+        texts = []
+        for page in doc:
+            try:
+                txt = page.get_text()
+                if txt and txt.strip():
+                    texts.append(txt.strip())
+                    continue
+            except Exception:
+                logger.debug("PyMuPDF get_text failed for page, will rasterize", exc_info=True)
+
+            try:
+                pix = page.get_pixmap()
+                img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+                t = ocr_image(img)
+                if t:
+                    texts.append(t.strip())
+            except Exception:
+                logger.debug("PyMuPDF rasterize+OCR failed for page", exc_info=True)
+
+        result = "\n".join(texts).strip()
+        if result:
+            return result
+    except Exception:
+        logger.debug("PyMuPDF not available or failed", exc_info=True)
+
+    # give up
+    return ""
 
 
 def chunk_text(text: str, *, max_chars: int = 2000, overlap: int = 200) -> List[str]:

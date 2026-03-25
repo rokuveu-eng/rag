@@ -7,3 +7,7 @@ openpyxl
 fastembed>=0.3.4
 pytesseract
 pdf2image
+Pillow
+pikepdf
+PyMuPDF
+python-magic
